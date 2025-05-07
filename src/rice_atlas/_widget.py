@@ -32,7 +32,7 @@ Replace code below according to your needs.
 from typing import TYPE_CHECKING
 
 from magicgui import magic_factory
-from magicgui.widgets import CheckBox, Container, create_widget
+from magicgui.widgets import CheckBox, Container, create_widget,FileEdit
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
 from skimage.util import img_as_float
 from rice_atlas.predictor import segment_volume
@@ -131,8 +131,8 @@ class ExampleQWidget(QWidget):
 
 
 @magic_factory(
-    model_path={"label": "Chemin du modèle"},
-    volume_path={"label": "Volume à segmenter"},
+    model_path={"widget_type": "FileEdit", "label": "Chemin du modèle", "mode": "r"},
+    volume_path={"widget_type": "FileEdit", "label": "Volume à segmenter", "mode": "r"},
     output_path={"label": "Fichier de sortie (optionnel)", "nullable": True},
     patch_size={"label": "Taille du patch", "min": 16, "max": 256, "step": 16},
     stride={"label": "Stride", "min": 8, "max": 256, "step": 8},
@@ -158,4 +158,5 @@ def segment_volume_widget(
     )
     if viewer is not None:
         viewer.add_labels(segmented, name="Segmentation")
+
 
