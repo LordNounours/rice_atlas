@@ -29,6 +29,10 @@ dependencies = [
     "magicgui",
     "qtpy",
     "scikit-image",
+    "torch",
+    "tifffile",
+    "tqdm",
+    "einops"
 ]
 
 [project.optional-dependencies]

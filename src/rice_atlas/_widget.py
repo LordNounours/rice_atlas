@@ -35,6 +35,7 @@ from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
 from skimage.util import img_as_float
+from rice_atlas.predictor import segment_volume
 
 if TYPE_CHECKING:
     import napari
@@ -127,3 +128,34 @@ class ExampleQWidget(QWidget):
 
     def _on_click(self):
         print("napari has", len(self.viewer.layers), "layers")
+
+
+@magic_factory(
+    model_path={"label": "Chemin du modèle"},
+    volume_path={"label": "Volume à segmenter"},
+    output_path={"label": "Fichier de sortie (optionnel)", "nullable": True},
+    patch_size={"label": "Taille du patch", "min": 16, "max": 256, "step": 16},
+    stride={"label": "Stride", "min": 8, "max": 256, "step": 8},
+    batch_size={"label": "Taille du batch", "min": 1, "max": 64, "step": 1},
+)
+def segment_volume_widget(
+    model_path: str,
+    volume_path: str,
+    output_path: str = None,
+    patch_size: int = 128,
+    stride: int = 96,
+    batch_size: int = 32,
+    viewer: "napari.viewer.Viewer" = None,
+) -> None:
+    """Segment a 3D TIFF volume using a 3D SegFormer model and display result."""
+    segmented = segment_volume(
+        model_path=model_path,
+        volume_path=volume_path,
+        output_path=output_path,
+        patch_size=patch_size,
+        stride=stride,
+        batch_size=batch_size,
+    )
+    if viewer is not None:
+        viewer.add_labels(segmented, name="Segmentation")
+

@@ -3,7 +3,7 @@ display_name: Rice Atlas
 # use 'hidden' to remove plugin from napari hub search results
 visibility: public
 # see https://napari.org/stable/plugins/technical_references/manifest.html#fields for valid categories
-categories: ["Annotation", "Segmentation", "Acquisition"]
+categories: ["Segmentation"]
 contributions:
   commands:
     - id: rice-atlas.get_reader
@@ -30,6 +30,9 @@ contributions:
     - id: rice-atlas.make_qwidget
       python_name: rice_atlas:ExampleQWidget
       title: Make example QWidget
+    - id: rice_atlas.segment_volume
+      python_name: rice_atlas._widget:segment_volume_widget
+      title: Segmenter un volume 3D
   readers:
     - command: rice-atlas.get_reader
       accepts_directories: false
@@ -55,3 +58,5 @@ contributions:
       display_name: Autogenerate Threshold
     - command: rice-atlas.make_qwidget
       display_name: Example QWidget
+    - command: rice_atlas.segment_volume
+      display_name: Segmentation 3D (SegFormer)
