@@ -67,7 +67,7 @@ def predict_patches_batch(model, batch_tensor):
 
 
 def segment_volume(model_path: str, volume_path: str, output_path: str = None,
-                   patch_size: int = 128, stride: int = 96, batch_size: int = 32) -> np.ndarray:
+                   patch_size: int = 128, stride: int = 96, batch_size: int = 16) -> np.ndarray:
     print("🔄 Chargement du modèle...")
     model = load_model(model_path, SegFormer3D)
 

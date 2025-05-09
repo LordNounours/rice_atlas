@@ -18,18 +18,6 @@ contributions:
     - id: rice-atlas.make_sample_data
       python_name: rice_atlas._sample_data:make_sample_data
       title: Load sample data from Rice Atlas
-    - id: rice-atlas.make_container_widget
-      python_name: rice_atlas:ImageThreshold
-      title: Make threshold Container widget
-    - id: rice-atlas.make_magic_widget
-      python_name: rice_atlas:threshold_magic_widget
-      title: Make threshold magic widget
-    - id: rice-atlas.make_function_widget
-      python_name: rice_atlas:threshold_autogenerate_widget
-      title: Make threshold function widget
-    - id: rice-atlas.make_qwidget
-      python_name: rice_atlas:ExampleQWidget
-      title: Make example QWidget
     - id: rice-atlas.segment_volume_widget
       python_name: rice_atlas._widget:segment_volume_widget
       title: Widget pour segmenter un volume 3D
@@ -50,14 +38,5 @@ contributions:
       display_name: Rice Atlas
       key: unique_id.1
   widgets:
-    - command: rice-atlas.make_container_widget
-      display_name: Container Threshold
-    - command: rice-atlas.make_magic_widget
-      display_name: Magic Threshold
-    - command: rice-atlas.make_function_widget
-      autogenerate: true
-      display_name: Autogenerate Threshold
-    - command: rice-atlas.make_qwidget
-      display_name: Example QWidget
     - command: rice-atlas.segment_volume_widget
       display_name: Segmentation 3D (SegFormer)
