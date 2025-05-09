@@ -18,6 +18,7 @@ save_button_ref = {}
     patch_size={"label": "Taille du patch", "min": 16, "max": 256, "step": 16},
     stride={"label": "Stride", "min": 8, "max": 256, "step": 8},
     batch_size={"label": "Taille du batch", "min": 1, "max": 64, "step": 1},
+    pretreatment={"label": " Prétraitement ", "widget_type": "CheckBox", "value": False},  
 )
 def segment_volume_widget(
     model_path: str,
@@ -26,6 +27,7 @@ def segment_volume_widget(
     patch_size: int = 128,
     stride: int = 96,
     batch_size: int = 16,
+    pretreatment = False,
     viewer: "napari.viewer.Viewer" = None,
 ) -> None:
     """Segment a 3D TIFF volume using a 3D SegFormer model and display result."""
@@ -37,6 +39,7 @@ def segment_volume_widget(
         patch_size=patch_size,
         stride=stride,
         batch_size=batch_size,
+        pretreatment=pretreatment
     )
 
     if viewer is not None:

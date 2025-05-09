@@ -5,9 +5,56 @@ import tifffile as tiff
 from torch import nn
 from tqdm import tqdm
 from rice_atlas.model.segformer3d import SegFormer3D  
+from scipy.ndimage import gaussian_filter
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def preprocess_volume(volume: np.ndarray, threshold: int = 120, sigma: float = 1.0) -> np.ndarray:
+    """
+    Applique un prétraitement pour supprimer les bords proches des zones brillantes, 
+    puis un lissage gaussien 3D.
 
+    Parameters:
+        volume (np.ndarray): Le volume d'entrée [D, H, W].
+        threshold (int): Seuil pour les pixels brillants. Par défaut 120.
+        sigma (float): Écart type du filtre gaussien. Par défaut 1.0.
+
+    Returns:
+        np.ndarray: Le volume prétraité et lissé.
+    """
+    # Étape 1 : suppression des voisins des pixels brillants
+    processed_slices = []
+
+    for slice_idx in range(volume.shape[0]):
+        image = volume[slice_idx]
+        neighbors_image = np.zeros_like(image)
+        thresholded_image = image >= threshold
+
+        rows, cols = image.shape
+        for i in range(1, rows - 1):
+            for j in range(1, cols - 1):
+                if thresholded_image[i, j]:
+                    for di in [-1, 0, 1]:
+                        for dj in [-1, 0, 1]:
+                            if di == 0 and dj == 0:
+                                continue
+                            ni, nj = i + di, j + dj
+                            if 0 <= ni < rows and 0 <= nj < cols:
+                                neighbors_image[ni, nj] = 255
+
+        updated_image = image.copy()
+        updated_image[neighbors_image == 255] = 0
+        processed_slices.append(updated_image)
+
+    processed_stack = np.array(processed_slices, dtype=np.float32)
+
+    # Étape 2 : lissage gaussien 3D
+    smoothed_stack = gaussian_filter(processed_stack, sigma=sigma)
+
+    # (Optionnel) Reconvertir en uint8 si nécessaire
+    smoothed_stack = np.clip(smoothed_stack, 0, 255)
+    smoothed_stack = smoothed_stack.astype(np.uint8)
+
+    return smoothed_stack
 
 def load_model(model_path, model_architecture):
     if not os.path.exists(model_path):
@@ -67,12 +114,18 @@ def predict_patches_batch(model, batch_tensor):
 
 
 def segment_volume(model_path: str, volume_path: str, output_path: str = None,
-                   patch_size: int = 128, stride: int = 96, batch_size: int = 16) -> np.ndarray:
+                   patch_size: int = 128, stride: int = 96, batch_size: int = 16 ,pretreatment : bool = False) -> np.ndarray:
     print("🔄 Chargement du modèle...")
     model = load_model(model_path, SegFormer3D)
 
     print(f"🔄 Chargement du volume depuis {volume_path}")
     volume = tiff.imread(volume_path)  # [D, H, W]
+
+    # Appliquer le prétraitement si pretreatment est activé
+    if pretreatment:
+        print("🔄 Application du prétraitement...")
+        volume = preprocess_volume(volume)  # Appliquer le prétraitement sur le volume
+
     shape = volume.shape
     segmented = np.zeros(shape, dtype=np.uint8)
 
@@ -91,7 +144,8 @@ def segment_volume(model_path: str, volume_path: str, output_path: str = None,
             segmented[z:z+dz, y:y+dy, x:x+dx] = pred[:dz, :dy, :dx]
 
     if output_path:
+        segmented_to_save = (segmented * 255).astype(np.uint8)
         print(f"💾 Sauvegarde du volume segmenté dans {output_path}")
-        tiff.imwrite(output_path, segmented)
+        tiff.imwrite(output_path, segmented_to_save)
 
     return segmented
