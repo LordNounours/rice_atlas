@@ -12,8 +12,5 @@ __all__ = (
     "write_single_image",
     "write_multiple",
     "make_sample_data",
-    "ExampleQWidget",
-    "ImageThreshold",
-    "threshold_autogenerate_widget",
-    "threshold_magic_widget",
+    "segment_volume_widget"
 )
