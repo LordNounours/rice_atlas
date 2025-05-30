@@ -120,7 +120,7 @@ def segment_volume(
     coords_list = compute_patch_coords(shape, patch_size, stride)
 
     # Limiter coords_list selon tap_center z
-    max_z = int(tap_center[0])  # convertir en int au cas où
+    max_z = int(tap_center[2]) + 100
     filtered_coords = [coord for coord in coords_list if coord[0] <= max_z]
 
     print(f"🚀 Prédiction sur {len(filtered_coords)} patches (limité par tap_center z={max_z})...")
@@ -147,7 +147,6 @@ def segment_volume(
 
             buffer, buffer_coords = [], []
 
-    # Reste du buffer idem...
     if buffer:
         batch_tensor = prepare_patches_batch(buffer)
         batch_probs, _ = predict_patches_batch(model, batch_tensor)
@@ -160,9 +159,18 @@ def segment_volume(
             probas_volume[z:z+dz, y:y+dy, x:x+dx] += patch_prob[:dz, :dy, :dx]
             count_map[z:z+dz, y:y+dy, x:x+dx] += 1
 
-    print("📊 Moyenne des probabilités...")
-    count_map[count_map == 0] = 1  # évite division par zéro
-    probas_volume /= count_map
+    print("📊 Moyennage des probabilités (zone prédite uniquement)...")
+
+    # ➕ Moyenne uniquement sur la zone réellement prédite
+    zs, ys, xs = zip(*filtered_coords)
+    zmin, zmax = min(zs), max(zs) + patch_size
+    ymin, ymax = min(ys), max(ys) + patch_size
+    xmin, xmax = min(xs), max(xs) + patch_size
+
+    sub_count = count_map[zmin:zmax, ymin:ymax, xmin:xmax]
+    sub_count[sub_count == 0] = 1
+
+    probas_volume[zmin:zmax, ymin:ymax, xmin:xmax] /= sub_count
 
     binary_segmentation = (probas_volume >= 0.5).astype(np.uint8)
     print("Valeurs uniques (segmentation binaire) :", np.unique(binary_segmentation))
@@ -174,5 +182,6 @@ def segment_volume(
                 tif.write(binary_segmentation[z], contiguous=True)
 
     return probas_volume, binary_segmentation
+
 
 

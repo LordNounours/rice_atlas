@@ -12,6 +12,7 @@ import random
 from tqdm import tqdm
 import gc
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
 VOLUME_PATH = "/tmp/volume_proba_red.npy"
 MASK_PATH = "/tmp/border_mask.npy"
@@ -25,10 +26,9 @@ def load_memmap_arrays():
     mask = np.load(MASK_PATH, mmap_mode='r')
     return volume, mask
 
-def path_for_one_root(start):
+def path_for_one_root(start,center):
     print(f"Start : {start}")
     volume, border_mask = load_memmap_arrays()
-    center = get_border_center(border_mask)
     end, came_from = astar_to_border_with_map(volume, start, border_mask, center)
     if end is not None:
         path = reconstruct_path(came_from, end, start)
@@ -37,10 +37,10 @@ def path_for_one_root(start):
     return None
 
 
-def dijkstra_parallel(starts, max_workers=4):
+def dijkstra_parallel(starts, center,max_workers=4):
     all_paths = []
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(path_for_one_root, start) for start in starts]
+        futures = [executor.submit(path_for_one_root, start,center) for start in starts]
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Calcul parallèle des chemins"):
             result = future.result()
@@ -76,9 +76,9 @@ def apply_morpho_opening_3d(binary_volume, radius=2, iterations=1):
 
     return (opened.astype(np.uint8) * 255)
 
-def extract_local_volume(volume, center, size=500):
+def extract_local_volume(volume, center, size=250):
     """Extrait un sous-volume cubique autour de la graine"""
-    z, y, x = center
+    x, y, z = center
     half = size // 2
     zmin, zmax = max(0, z - half), min(volume.shape[0], z + half)
     ymin, ymax = max(0, y - half), min(volume.shape[1], y + half)
@@ -110,19 +110,18 @@ def keep_largest_component_per_slice(volume):
 
     return result
 
-def segment_structure(volume, seed_point, output_path="structure_segmentee_global.tif", box_size=500):
+def segment_structure(volume, seed_point, output_path="structure_segmentee_global.tif", box_size=250):
     # --- Extraire un sous-volume autour de la graine ---
     subvol, offset = extract_local_volume(volume, seed_point, size=box_size)
-
     # --- Binarisation Otsu ---
     thresh = threshold_otsu(subvol)
     print(f"[i] Seuil Otsu : {thresh}")
     binary = (subvol > thresh).astype(np.uint8) * 255
-    tiff.imwrite("step1_binary_threshold.tif", binary)
+    #tiff.imwrite("step1_binary_threshold.tif", binary)
 
     # --- Morphologie ---
     binary_eroded = apply_morpho_opening_3d(binary, radius=2, iterations=4)
-    tiff.imwrite("step2_opening_applied.tif", binary_eroded)
+    #tiff.imwrite("step2_opening_applied.tif", binary_eroded)
 
     # --- Filtrage composante principale par slice ---
     filtered = keep_largest_component_per_slice(binary_eroded)
@@ -134,18 +133,38 @@ def segment_structure(volume, seed_point, output_path="structure_segmentee_globa
     z1, y1, x1 = z0 + filtered.shape[0], y0 + filtered.shape[1], x0 + filtered.shape[2]
     full_mask[z0:z1, y0:y1, x0:x1] = filtered
 
-    tiff.imwrite(output_path, full_mask)
-    print(f"[✓] Masque segmenté inséré dans le volume global : {output_path}")
+    #tiff.imwrite(output_path, full_mask)
+    #print(f"[✓] Masque segmenté inséré dans le volume global : {output_path}")
 
     return full_mask
 
 
-def get_extremities(input_tiff, zmax, z_window, min_size, low_corner, high_corner):
-    with tiff.TiffFile(input_tiff) as tif:
-        volume = tif.asarray(out='memmap')
-        print(f"Volume chargé : {volume.shape}")
-
-    volume_cropped = volume[:zmax+1]
+def get_extremities_from_volume(volume, zmax, z_window, min_size, low_corner, high_corner):
+    """
+    Trouve les extrémités des composantes dans un volume numpy, en filtrant
+    sur zmax, taille min, et coordonnées XY dans un rectangle donné.
+    
+    Parameters:
+        volume : ndarray (3D)
+            Volume binaire (uint8 ou bool) déjà chargé en mémoire.
+        zmax : int
+            Limite supérieure sur l’axe Z à considérer.
+        z_window : int
+            Fenêtre de recherche sur Z (entre zmax-z_window et zmax).
+        min_size : int
+            Taille minimale d’une composante pour être conservée.
+        low_corner : tuple (x, y)
+            Coin bas (X, Y) du rectangle de filtrage.
+        high_corner : tuple (x, y)
+            Coin haut (X, Y) du rectangle de filtrage.
+    
+    Returns:
+        z_min_points : list of tuples (z, y, x)
+            Points minimum en Z des composantes filtrées.
+        discarded_mask : ndarray
+            Masque des voxels rejetés.
+    """
+    volume_cropped = volume[:zmax]
     print(f"Sous-volume utilisé : {volume_cropped.shape}")
 
     if volume_cropped.dtype != np.uint8:
@@ -167,6 +186,7 @@ def get_extremities(input_tiff, zmax, z_window, min_size, low_corner, high_corne
 
     for region in regionprops(labels):
         coords = region.coords
+        # Vérification : tous les voxels doivent être dans le foreground
         for c in coords:
             z, y, x = c
             if volume_cropped[z, y, x] != 1:
@@ -178,10 +198,10 @@ def get_extremities(input_tiff, zmax, z_window, min_size, low_corner, high_corne
             discarded_count += 1
             continue
 
-        z_max = np.max(z_coords)
-        zm, ym, xm = coords[z_coords == z_max][0]
+        z_max_region = np.max(z_coords)
+        zm, ym, xm = coords[z_coords == z_max_region][0]
 
-        if z_start <= z_max <= z_end and low_corner[0] < xm < high_corner[0] and high_corner[1] < ym < low_corner[1]:
+        if z_start <= z_max_region <= z_end and low_corner[0] < xm < high_corner[0] and high_corner[1] < ym < low_corner[1]:
             z_min = np.min(z_coords)
             z_min_point = coords[z_coords == z_min][0]
             z_min_points.append(tuple(z_min_point))
@@ -195,11 +215,9 @@ def get_extremities(input_tiff, zmax, z_window, min_size, low_corner, high_corne
     z_min_points = sorted(z_min_points, key=lambda coord: coord[0])
     print("Liste des points (z_min, y, x) :", z_min_points)
 
-    del volume
     gc.collect()
 
     return z_min_points, discarded_mask
-
 
 
 # --- Génération des directions 3D ---
@@ -218,36 +236,24 @@ def get_connectivity_weight(dz, dy, dx):
         return math.sqrt(3)  # 26-connectivité
 
 
-def export_path_mask(shape, path, output_path="chemin_mask.tif"):
-    mask = np.zeros(shape, dtype=np.uint8)
-    for z, y, x in path:
-        mask[z, y, x] = 255
-    tiff.imwrite(output_path, mask)
-    print(f"[✓] Masque binaire du chemin exporté : {output_path}")
-
-
-def manhattan(p1, p2):
-    return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1]) + abs(p1[2] - p2[2])
-
-def compute_h_max(shape, goal_point):
-    z_size, y_size, x_size = shape
-    corners = [
-        (0, 0, 0),
-        (0, 0, x_size - 1),
-        (0, y_size - 1, 0),
-        (0, y_size - 1, x_size - 1),
-        (z_size - 1, 0, 0),
-        (z_size - 1, 0, x_size - 1),
-        (z_size - 1, y_size - 1, 0),
-        (z_size - 1, y_size - 1, x_size - 1),
-    ]
-    return max(manhattan(corner, goal_point) for corner in corners)
-
-def proba_aware_heuristic(a, b, mean_proba=0.85, base_weight=1.0):
-    d = manhattan(a, b)
+def proba_aware_heuristic_euclidean(a, b, mean_proba=0.85, base_weight=1.0):
+    """
+    Heuristique pondérée par une probabilité moyenne, utilisant la distance euclidienne.
+    
+    Paramètres :
+        a (tuple or array): Coordonnées du point A.
+        b (tuple or array): Coordonnées du point B.
+        mean_proba (float): Probabilité moyenne (entre 0 et 1).
+        base_weight (float): Poids de base appliqué à la distance.
+    
+    Retourne :
+        float: Valeur heuristique.
+    """
+    d = np.linalg.norm(np.array(a) - np.array(b))  # distance euclidienne
     return d * base_weight * (1 - mean_proba)
 
-def astar_to_border_with_map(volume, start, border_mask, goal_point, heuristic_weight=0.45):
+
+def astar_to_border_with_map(volume, start, border_mask, goal_point, heuristic_weight=0.3):
     shape = volume.shape
     mean_proba = np.mean(volume)  # ou fixe comme 0.85 si tu préfères
 
@@ -258,7 +264,7 @@ def astar_to_border_with_map(volume, start, border_mask, goal_point, heuristic_w
     heap = []
     distances[start] = 0.0
 
-    h = proba_aware_heuristic(goal_point, start, mean_proba)
+    h = proba_aware_heuristic_euclidean(goal_point, start, mean_proba)
 
     heapq.heappush(heap, (h * heuristic_weight, 0.0, start))  # (f = g + h, g, node)
 
@@ -289,13 +295,12 @@ def astar_to_border_with_map(volume, start, border_mask, goal_point, heuristic_w
                     distances[nz, ny, nx] = new_g
                     came_from[(nz, ny, nx)] = (z, y, x)
 
-                    h = proba_aware_heuristic(goal_point, (nz, ny, nx), mean_proba)
+                    h = proba_aware_heuristic_euclidean(goal_point, (nz, ny, nx), mean_proba)
 
                     heapq.heappush(heap, (new_g + heuristic_weight * h, new_g, (nz, ny, nx)))
 
     print("[!] Aucun bord atteint.")
     return None, came_from
-
 
 
 def reconstruct_path(came_from, end, start):
@@ -309,23 +314,6 @@ def reconstruct_path(came_from, end, start):
     path.append(start)
     path.reverse()
     return path
-
-def dijkstra_to_border_multiple_starts(volume, starts, border_mask,center):
-    """
-    Trouver un chemin du start point vers border_mask pour plusieurs points start.
-    Retourne une liste de (start, end, path).
-    """
-    all_paths = []
-    for start in tqdm(starts, desc="Calcul des chemins"):
-        print(f"Start {start}")
-        end, came_from = astar_to_border_with_map(volume, start, border_mask,center)
-        if end is not None:
-            path = reconstruct_path(came_from, end, start)
-            all_paths.append((start, end, path))
-        else:
-            print(f"[!] Aucun chemin pour le point de départ {start}")
-    return all_paths
-
 
 def export_paths_colored_mask(shape, paths, output_path="chemins_colores.tif"):
     """
@@ -343,7 +331,7 @@ def export_paths_colored_mask(shape, paths, output_path="chemins_colores.tif"):
         for (z, y, x) in path:
             color_mask[z, y, x] = color
 
-    tiff.imwrite(output_path, color_mask)
+    #tiff.imwrite(output_path, color_mask)
     print(f"[✓] Chemins colorés exportés dans : {output_path}")
 
 def get_border_center(border_mask):
@@ -351,57 +339,58 @@ def get_border_center(border_mask):
     center = coords.mean(axis=0)
     return tuple(center)
 
-def compute_distance_map_to_center(shape, center):
-    zz, yy, xx = np.indices(shape)
-    cz, cy, cx = center
-    dist_map = np.abs(zz - cz) + np.abs(yy - cy) + np.abs(xx - cx)
-    return dist_map.astype(np.uint16)
+def run_tracking_pipeline(
+    input_path_volume,
+    seed_point,
+    low_corner,
+    high_corner,
+    output_dir=".",
+    zmax=2000,
+    z_window=250,
+    min_size=1000,
+    box_size=250,
+    max_workers=4,
+    probas_volume=None,
+    segmented=None
+):
+    print("[i] Début du pipeline de tracking...")
 
+    # Si on n’a pas les volumes en mémoire, on lit depuis les fichiers
+    if segmented is None or probas_volume is None:
+        raise ValueError("Il faut passer 'probas_volume' ET 'segmented' directement, pas les chemins.")
+    print(f"zmax avant get extremitis {zmax}")
+    # start_points et discarded_mask sont extraits depuis segmented
+    start_points, discarded_mask = get_extremities_from_volume(segmented, zmax, z_window, min_size, low_corner, high_corner)
 
-
-# --- MAIN ---
-if __name__ == "__main__":
-    
-    input_path_seg = "/home/thomas/Bureau/Code/seg_volume_linked.tiff"
-    low_corner=(505,739)
-    high_corner=(930,220)
-    start_points,discarded_mask = get_extremities(input_path_seg,2000,250,1000,low_corner,high_corner)
-    #start_points=start_points[:10]
-    
-    input_path_volume = "/home/thomas/Bureau/01_full_plant_v2_SlicesY-1_FULL_8bit2_sandless_smooth.tif"
+    # volume original chargé depuis input_path_volume (si besoin)
     with tiff.TiffFile(input_path_volume) as tif:
         volume = tif.asarray(out='memmap')
 
+
     shape = volume.shape
-    segmented_mask = segment_structure(volume,(1956, 481, 686))
+    segmented_mask = segment_structure(volume,seed_point)
     border_mask = segmented_mask - binary_erosion(segmented_mask.astype(bool)).astype(np.uint8) * 255
     border_mask = border_mask.astype(bool)
+    
 
-    
-    center = get_border_center(border_mask)
-    
-    volume_proba = tiff.imread("/home/thomas/Bureau/Code/heatmap_volume2.tiff")
-    volume_proba_red=volume_proba[:2100]
+    # découpage des probas volume si besoin
+    volume_proba_red = probas_volume[:zmax+144]
+
     save_arrays(volume_proba_red, border_mask)
 
-    del volume_proba
+    del probas_volume
+    del volume
+    del segmented
     gc.collect()
+    center = get_border_center(border_mask)
+    all_paths = dijkstra_parallel(start_points,center, max_workers=max_workers)
 
-    del volume,segmented_mask
-    gc.collect()
-    all_paths = dijkstra_parallel(start_points, max_workers=4)
+    #export_paths_colored_mask(shape, all_paths, os.path.join(output_dir, "chemins_colores.tif"))
+    #tiff.imwrite(os.path.join(output_dir, "composantes_non_utilisées.tif"), discarded_mask.astype(np.uint8))
 
 
+    print("[✓] Pipeline de tracking terminé.")
 
-    export_paths_colored_mask(shape, all_paths, "chemins_colores2.tif")
+    return all_paths
 
-    tiff.imwrite("composantes_non_utilisées2.tif", discarded_mask.astype(np.uint8))
-    print("[✓] Fichier TIFF écrit : composantes_non_utilisées2.tif")
-    if os.path.exists(VOLUME_PATH):
-        
-        print(f"[✓] Fichier supprimé : {VOLUME_PATH}")
-
-    if os.path.exists(MASK_PATH):
-        os.remove(MASK_PATH)
-        print(f"[✓] Fichier supprimé : {MASK_PATH}")
 
