@@ -6,9 +6,12 @@ from qtpy.QtWidgets import (
 )
 from rice_atlas.predictor import segment_volume
 from rice_atlas.tracking import run_tracking_pipeline
-from tifffile import imwrite
+from tifffile import imwrite,imread
 import multiprocessing
 import random 
+import csv
+from pathlib import Path
+from scipy.ndimage import center_of_mass,binary_erosion
 
 if TYPE_CHECKING:
     import napari
@@ -152,7 +155,38 @@ def segment_volume_widget(
         layout.addWidget(corners_container)
         corners_container.show()
         save_button_ref["corners_container"] = corners_container
+        def recentre_point_local_volume(volume, z, y, x, win_size=64, threshold=10):
+            half = win_size // 2
 
+            # Clamp fenêtre dans le plan 2D (y,x) à la tranche z
+            y_min = max(0, y - half)
+            y_max = min(volume.shape[1], y + half)
+            x_min = max(0, x - half)
+            x_max = min(volume.shape[2], x + half)
+
+            patch = volume[z, y_min:y_max, x_min:x_max]
+
+            mask = patch > threshold
+            if np.sum(mask) == 0:
+                # Pas de structure détectée, on ne décale pas
+                return y, x
+
+            com_y_patch, com_x_patch = center_of_mass(patch * mask)
+
+            # Centre de masse dans les coordonnées globales (volume)
+            com_y = y_min + com_y_patch
+            com_x = x_min + com_x_patch
+
+            # Nouveau point recalé (borné dans les dimensions)
+            new_y = int(round(com_y))
+            new_x = int(round(com_x))
+
+            new_y = max(0, min(volume.shape[1] - 1, new_y))
+            new_x = max(0, min(volume.shape[2] - 1, new_x))
+
+            return new_y, new_x
+        
+        
         def run_tracking_with_corners():
             low_corner = (low_corner_x.value(), low_corner_y.value())
             high_corner = (high_corner_x.value(), high_corner_y.value())
@@ -162,6 +196,21 @@ def segment_volume_widget(
             all_paths = run_tracking_pipeline(volume_path, tap_center, low_corner, high_corner, zmax=z_max,
                                             probas_volume=probas_volume, segmented=segmented)
             print("✅ Tracking terminé.")
+            volume = imread(volume_path)  # On charge ici pour éviter de le recharger plus tard
+            slice_size = 16
+            all_paths_recal = []
+            n_iter = 8  # Nombre d’itérations de recentrage
+
+            for seed, score, path in all_paths:
+                new_path = []
+                for z, y, x in path:
+                    for _ in range(n_iter):
+                        y, x = recentre_point_local_volume(volume, z, y, x, win_size=slice_size, threshold=10)
+                    new_path.append((z, y, x))
+                all_paths_recal.append((seed, score, new_path))
+
+            print("🧠 Chemins recalés")
+
 
             # Conversion paths -> volume labelisé RGB pour napari
             shape = probas_volume.shape
@@ -174,6 +223,16 @@ def segment_volume_widget(
             # Ajouter dans napari
             viewer.add_image(color_mask, name="Chemins colorés", rgb=True)
 
+            shape = probas_volume.shape
+            color_mask = np.zeros(shape + (3,), dtype=np.uint8)
+            for idx, (_, _, path) in enumerate(all_paths_recal):
+                color = tuple(random.choices(range(50, 256), k=3))
+                for (z, y, x) in path:
+                    color_mask[z, y, x] = color
+
+            # Ajouter dans napari
+            viewer.add_image(color_mask, name="Chemins colorés_recalés", rgb=True)
+
             def save_colored_paths():
                 save_path, _ = QFileDialog.getSaveFileName(
                     caption="Enregistrer les chemins colorés",
@@ -182,11 +241,69 @@ def segment_volume_widget(
                 if save_path:
                     imwrite(save_path, color_mask.astype(np.uint8))
                     print(f"✅ Chemins colorés sauvegardés à : {save_path}")
+            def save_paths_to_csv():
+                dir_path = QFileDialog.getExistingDirectory(
+                    caption="Choisir un dossier pour enregistrer les chemins CSV"
+                )
+                if dir_path:
+                    from pathlib import Path
+                    import csv
 
+                    for idx, (_, _, path) in enumerate(all_paths):
+                        csv_path = Path(dir_path) / f"{idx}.csv"
+                        with open(csv_path, mode="w", newline="") as csvfile:
+                            writer = csv.writer(csvfile)
+                            writer.writerow(["X", "Y", "Z"])
+                            for z, y, x in path:
+                                writer.writerow([x, y, z])  # X, Y, Z
+
+                    print(f"✅ {len(all_paths)} chemins enregistrés dans {dir_path}")
+
+            def extract_root_slices():
+                dir_path = QFileDialog.getExistingDirectory(
+                    caption="Choisir un dossier pour enregistrer les slices racines"
+                )
+                if not dir_path:
+                    return
+                volume = imread(volume_path)  # ✅ On lit bien un TIFF ici
+
+                slice_size = 64  # taille des slices extraites (64x64)
+                half = slice_size // 2
+
+                for idx, (_, _, path) in enumerate(all_paths):
+                    root_dir = Path(dir_path) / f"root_{idx}"
+                    root_dir.mkdir(parents=True, exist_ok=True)
+
+                    for z, y, x in path:
+                        if (
+                            y - half < 0 or y + half >= volume.shape[1]
+                            or x - half < 0 or x + half >= volume.shape[2]
+                            or z < 0 or z >= volume.shape[0]
+                        ):
+                            continue
+
+                        slice_ = volume[z, y - half : y + half, x - half : x + half]
+                        imwrite(str(root_dir / f"{z}.tif"), slice_.astype(volume.dtype))
+
+                print(f"✅ Slices extraites dans : {dir_path}")
+
+            
             btn_save_colored = QPushButton("Sauvegarder chemins colorés")
             btn_save_colored.clicked.connect(save_colored_paths)
             layout.addWidget(btn_save_colored)
             save_button_ref["save_button_tracking"] = btn_save_colored
+
+            btn_save_csv = QPushButton("Sauvegarder chemins en CSV")
+            btn_save_csv.clicked.connect(save_paths_to_csv)
+            layout.addWidget(btn_save_csv)
+            save_button_ref["save_button_csv"] = btn_save_csv
+
+            btn_extract_slices = QPushButton("Extraire slices racines")
+            btn_extract_slices.clicked.connect(extract_root_slices)
+            layout.addWidget(btn_extract_slices)
+            save_button_ref["btn_extract_slices"] = btn_extract_slices
+
+            
 
 
 
