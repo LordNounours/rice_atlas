@@ -374,7 +374,7 @@ def run_tracking_pipeline(
     
 
     # découpage des probas volume si besoin
-    volume_proba_red = probas_volume[:zmax+144]
+    volume_proba_red = probas_volume[:zmax+100]
 
     save_arrays(volume_proba_red, border_mask)
 

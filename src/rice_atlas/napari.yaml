@@ -18,9 +18,10 @@ contributions:
     - id: rice-atlas.make_sample_data
       python_name: rice_atlas._sample_data:make_sample_data
       title: Load sample data from Rice Atlas
-    - id: rice-atlas.segment_volume_widget
-      python_name: rice_atlas._widget:segment_volume_widget
-      title: Widget pour segmenter un volume 3D
+    - id: rice-atlas.make_widget
+      python_name: rice_atlas:make_widget
+      title: Segmentation 3D (SegFormer)
+
 
   readers:
     - command: rice-atlas.get_reader
@@ -38,5 +39,5 @@ contributions:
       display_name: Rice Atlas
       key: unique_id.1
   widgets:
-    - command: rice-atlas.segment_volume_widget
+    - command: rice-atlas.make_widget
       display_name: Segmentation 3D (SegFormer)
