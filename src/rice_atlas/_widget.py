@@ -334,6 +334,8 @@ def build_segment_volume_widget(volume_shape):
                 viewer.add_image(make_color_mask(all_paths), name="Chemins colorés")
                 viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
                 viewer.add_image(discarded_mask, name="Composantes non utilisées",colormap="red",opacity=0.5)
+                from collections import defaultdict
+                manual_points_stack = defaultdict(list)
                 def reorder_layers_afterseg():
                     desired_order = ["Volume","Chemins colorés recalés","Chemins colorés","Composantes non utilisées", "Probabilités classe 1", "Segmentation"]
 
@@ -363,7 +365,7 @@ def build_segment_volume_widget(volume_shape):
 
                     viewer.add_labels(highlight, name=highlight_layer_name, opacity=1.0)
                     label_layer = viewer.layers[highlight_layer_name]
-
+                
                 current_path_index = [0]
                 def on_path_selected(index):
                     current_path_index[0] = index
@@ -375,7 +377,7 @@ def build_segment_volume_widget(volume_shape):
 
                 btn_add_points = QPushButton("➕ Ajouter des points à ce chemin")
                 layout.addWidget(btn_add_points)
-
+                previous_mouse_callbacks = []
                 def toggle_add_mode():
                     adding_mode[0] = not adding_mode[0]
                     state = "activé" if adding_mode[0] else "désactivé"
@@ -430,30 +432,77 @@ def build_segment_volume_widget(volume_shape):
                         pos = layer.world_to_data(event.position)
                         z, y, x = map(int, pos)
                         index = current_path_index[0]
-                        # Vérifie si un point avec ce z existe déjà dans le chemin
-                        if z not in [pt[0] for pt in all_paths_recal[index][2]]:
-                            print(f"➕ Ajout point ({z},{y},{x}) au chemin {index}")
-                            all_paths_recal[index][2].append((z, y, x))
-                            # Trie les points par z
-                            sorted_points = sorted(all_paths_recal[index][2])
-                            # Interpolation
-                            interpolated_points = interpolate_points(sorted_points)
-                            all_paths_recal[index] = (
-                                all_paths_recal[index][0],
-                                all_paths_recal[index][1],
-                                interpolated_points
-                            )
-                            update_highlighted_path(index)
-                            if "Chemins colorés recalés" in viewer.layers:
-                                viewer.layers.remove("Chemins colorés recalés")
-                                viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
-                                reorder_layers_add()
-                                viewer.layers.selection.active = viewer.layers["Volume"]
-                            
-                        else:
+
+                        existing_zs = [pt[0] for pt in all_paths_recal[index][2]]
+                        if z in existing_zs:
                             print(f"⚠️ Le point avec z={z} existe déjà dans ce chemin, ajout ignoré.")
+                            return
+
+                        new_point = (z, y, x)
+                        print(f"➕ Ajout point {new_point} au chemin {index}")
+
+                        # Ajouter temporairement le point
+                        all_paths_recal[index][2].append(new_point)
+                        sorted_points = sorted(all_paths_recal[index][2])
+                        interpolated = interpolate_points(sorted_points)
+
+                        # Déterminer les points effectivement ajoutés par interpolation
+                        interpolated_set = set(interpolated)
+                        original_set = set(all_paths_recal[index][2])
+                        added_by_interp = list(interpolated_set - original_set)
+
+                        # Mémoriser tous les points ajoutés pour ce clic (le point + interpolation)
+                        full_added = [new_point] + added_by_interp
+                        manual_points_stack[index].append(full_added)
+
+                        # Mise à jour du chemin
+                        all_paths_recal[index] = (
+                            all_paths_recal[index][0],
+                            all_paths_recal[index][1],
+                            interpolated
+                        )
+
+                        update_highlighted_path(index)
+                        if "Chemins colorés recalés" in viewer.layers:
+                            viewer.layers.remove("Chemins colorés recalés")
+                            viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                            reorder_layers_add()
+                            viewer.layers.selection.active = viewer.layers["Volume"]
+
+                def undo_last_manual_point():
+                    index = current_path_index[0]
+
+                    if not manual_points_stack[index]:
+                        print("⚠️ Aucun point manuel à annuler.")
+                        return
+
+                    removed_points = manual_points_stack[index].pop()
+                    print(f"↩️ Annulation des points manuels {removed_points} du chemin {index}")
+
+                    # Supprimer ces points du chemin
+                    remaining = [
+                        pt for pt in all_paths_recal[index][2]
+                        if pt not in removed_points
+                    ]
+
+                    all_paths_recal[index] = (
+                        all_paths_recal[index][0],
+                        all_paths_recal[index][1],
+                        sorted(remaining)
+                    )
+
+                    update_highlighted_path(index)
+                    if "Chemins colorés recalés" in viewer.layers:
+                        viewer.layers.remove("Chemins colorés recalés")
+                        viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                        reorder_layers_add()
+                        viewer.layers.selection.active = viewer.layers["Volume"]
+
+                btn_undo_point = QPushButton("↩️ Annuler dernier point")
+                btn_undo_point.clicked.connect(undo_last_manual_point)
+                layout.addWidget(btn_undo_point)
                 viewer.layers["Volume"].mouse_drag_callbacks.append(on_click_add_point)
-                
+
 
                 
                 for i in range(len(all_paths_recal)):
