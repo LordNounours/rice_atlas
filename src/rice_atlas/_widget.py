@@ -19,6 +19,7 @@ save_button_ref = {}
 segmentation_dock_ref = {}
 previous_mouse_callbacks = []
 
+
 @magic_factory(call_button="Charger un volume")
 def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
     path, _ = QFileDialog.getOpenFileName(
@@ -374,6 +375,75 @@ def build_segment_volume_widget(volume_shape):
                 path_selector = QComboBox()
                 path_selector.currentIndexChanged.connect(on_path_selected)
                 adding_mode = [False]
+                creating_new_path_mode = [False]
+                new_path_points = []
+                btn_new_path = QPushButton("🆕 Créer un nouveau chemin")
+                layout.addWidget(btn_new_path)
+                def on_click_create_new_path_point(layer, event):
+                    if not creating_new_path_mode[0]:
+                        return
+                    if event.type == 'mouse_press' and event.button == 1:
+                        pos = layer.world_to_data(event.position)
+                        z, y, x = map(int, pos)
+                        pt = (z, y, x)
+                        new_path_points.append(pt)
+                        print(f"🆕 ➕ Point ajouté à nouveau chemin : {pt}")
+                def toggle_create_new_path_mode():
+                    creating_new_path_mode[0] = not creating_new_path_mode[0]
+                    state = "activé" if creating_new_path_mode[0] else "désactivé"
+                    print(f"🆕 Mode création de chemin {state}")
+                    new_path_points.clear()
+
+                    volume_layer = viewer.layers["Volume"]
+                    if creating_new_path_mode[0]:
+                        # Sauver et désactiver les autres callbacks
+                        global previous_mouse_callbacks
+                        previous_mouse_callbacks = list(volume_layer.mouse_drag_callbacks)
+                        volume_layer.mouse_drag_callbacks.clear()
+                        volume_layer.mouse_drag_callbacks.append(on_click_create_new_path_point)
+                    else:
+                        # Restaure les anciens
+                        volume_layer.mouse_drag_callbacks.clear()
+                        for cb in previous_mouse_callbacks:
+                            volume_layer.mouse_drag_callbacks.append(cb)
+                        previous_mouse_callbacks.clear()
+
+                btn_new_path.clicked.connect(toggle_create_new_path_mode)
+                btn_validate_new_path = QPushButton("✅ Valider le nouveau chemin")
+                layout.addWidget(btn_validate_new_path)
+
+                def validate_new_path():
+                    if len(new_path_points) < 2:
+                        print("⚠️ Il faut au moins deux points pour créer un chemin.")
+                        return
+
+                    sorted_points = sorted(new_path_points)
+                    interpolated = interpolate_points(sorted_points)
+
+                    new_index = len(all_paths_recal)
+                    all_paths_recal.append(("inconnu", "inconnu", interpolated))
+                    manual_points_stack[new_index] = [interpolated]
+
+                    print(f"✅ Nouveau chemin #{new_index} créé avec {len(interpolated)} points.")
+
+                    # Mise à jour du sélecteur
+                    path_selector.addItem(f"Chemin {new_index}", new_index)
+
+                    # Optionnel : sélectionner et afficher
+                    current_path_index[0] = new_index
+                    update_highlighted_path(new_index)
+
+                    if "Chemins colorés recalés" in viewer.layers:
+                        viewer.layers.remove("Chemins colorés recalés")
+                    viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                    reorder_layers_add()
+                    viewer.layers.selection.active = viewer.layers["Volume"]
+
+                    # Reset
+                    new_path_points.clear()
+                    toggle_create_new_path_mode()  # désactive le mode création
+
+                btn_validate_new_path.clicked.connect(validate_new_path)
 
                 btn_add_points = QPushButton("➕ Ajouter des points à ce chemin")
                 layout.addWidget(btn_add_points)
@@ -533,20 +603,20 @@ def build_segment_volume_widget(volume_shape):
                 def save_paths_to_csv():
                     dir_path = QFileDialog.getExistingDirectory(caption="Choisir un dossier pour les CSV")
                     if dir_path:
-                        for idx, (_, _, path) in enumerate(all_paths):
+                        for idx, (_, _, path) in enumerate(all_paths_recal):
                             with open(Path(dir_path) / f"{idx}.csv", "w", newline="") as f:
                                 writer = csv.writer(f)
                                 writer.writerow(["X", "Y", "Z"])
                                 for z, y, x in path:
                                     writer.writerow([x, y, z])
-                        print(f"✅ {len(all_paths)} chemins enregistrés")
+                        print(f"✅ {len(all_paths_recal)} chemins enregistrés")
 
                 def extract_root_slices():
                     dir_path = QFileDialog.getExistingDirectory(caption="Dossier des slices racines")
                     if not dir_path:
                         return
                     half = 32
-                    for idx, (_, _, path) in enumerate(all_paths):
+                    for idx, (_, _, path) in enumerate(all_paths_recal):
                         root_dir = Path(dir_path) / f"root_{idx}"
                         root_dir.mkdir(parents=True, exist_ok=True)
                         for z, y, x in path:
