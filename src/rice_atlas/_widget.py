@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 save_button_ref = {}
 segmentation_dock_ref = {}
+previous_mouse_callbacks = []
 
 @magic_factory(call_button="Charger un volume")
 def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
@@ -59,7 +60,7 @@ def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
                 print(f"📍 Clic sur Volume : z={z}, y={y}, x={x}")
 
                 mode = seg_widget.click_mode.value  # récupère le mode clic dans le widget
-
+                print(f"💡 Mode clic actuel au moment du clic: {mode}")
                 if mode == "Centre":
                     seg_widget.tap_x.value = x
                     seg_widget.tap_y.value = y
@@ -81,7 +82,7 @@ def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
 save_button_ref = {}
 def build_segment_volume_widget(volume_shape):
     max_z, max_y, max_x = volume_shape
-
+    
     @magic_factory(
         model_path={"widget_type": "FileEdit", "label": "Chemin du modèle", "mode": "r"},
         volume_path={"widget_type": "FileEdit", "label": "Volume à segmenter", "mode": "r"},
@@ -142,6 +143,47 @@ def build_segment_volume_widget(volume_shape):
 
             viewer.layers.selection.active = viewer.layers["Volume"]
             reorder_layers()
+
+        def update_selection_rectangle():
+            if not viewer:
+                return
+
+            low_x = low_corner_x.value()
+            low_y = low_corner_y.value()
+            high_x = high_corner_x.value()
+            high_y = high_corner_y.value()
+
+            z_min = 0
+            z_max = probas_volume.shape[0] - 1  # profondeur
+
+            # Supprimer ancienne couche
+            for layer in viewer.layers:
+                if layer.name == "Zone sélectionnée":
+                    viewer.layers.remove(layer)
+                    break
+
+            rectangles = []
+            for z in range(z_min, z_max + 1):
+                rectangle = [
+                    [z, low_y, low_x],
+                    [z, low_y, high_x],
+                    [z, high_y, high_x],
+                    [z, high_y, low_x],
+                ]
+                rectangles.append(rectangle)
+
+            viewer.add_shapes(
+                rectangles,  # ✅ un rectangle par tranche z
+                shape_type='rectangle',
+                edge_color='red',
+                edge_width=2,
+                face_color=[1, 0, 0, 0.2],
+                name='Zone sélectionnée',
+                opacity=0.5,
+            )
+            viewer.layers.selection.active = viewer.layers["Volume"]
+
+
 
 
         # Nettoyer anciens boutons/docks liés à la sauvegarde
@@ -219,6 +261,12 @@ def build_segment_volume_widget(volume_shape):
         high_corner_row.addWidget(high_label)
         high_corner_row.addLayout(high_inputs)
         corners_layout.addLayout(high_corner_row)
+
+        low_corner_x.valueChanged.connect(update_selection_rectangle)
+        low_corner_y.valueChanged.connect(update_selection_rectangle)
+        high_corner_x.valueChanged.connect(update_selection_rectangle)
+        high_corner_y.valueChanged.connect(update_selection_rectangle)
+
         
         segment_volume_widget.low_corner_x = low_corner_x
         segment_volume_widget.low_corner_y = low_corner_y
@@ -255,7 +303,7 @@ def build_segment_volume_widget(volume_shape):
                 print(f"Utilisation des coins : low {low_corner}, high {high_corner}")
                 print("🚀 Lancement du tracking...")
                 print(f"Zmax avant run tracking pipeline {z_max}")
-                all_paths = run_tracking_pipeline(
+                all_paths , discarded_mask = run_tracking_pipeline(
                     volume_path, tap_center, low_corner, high_corner, zmax=z_max,
                     probas_volume=probas_volume, segmented=segmented
                 )
@@ -280,11 +328,14 @@ def build_segment_volume_widget(volume_shape):
                         for z, y, x in path:
                             color_mask[z, y, x] = color
                     return color_mask
+                if "Zone sélectionnée" in viewer.layers:
+                    viewer.layers.remove("Zone sélectionnée")
 
                 viewer.add_image(make_color_mask(all_paths), name="Chemins colorés")
                 viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                viewer.add_image(discarded_mask, name="Composantes non utilisées",colormap="red",opacity=0.5)
                 def reorder_layers_afterseg():
-                    desired_order = ["Volume","Chemins colorés recalés","Chemins colorés", "Probabilités classe 1", "Segmentation"]
+                    desired_order = ["Volume","Chemins colorés recalés","Chemins colorés","Composantes non utilisées", "Probabilités classe 1", "Segmentation"]
 
                     for target_index, name in enumerate(reversed(desired_order)):
                         for current_index, layer in enumerate(viewer.layers):
@@ -294,9 +345,132 @@ def build_segment_volume_widget(volume_shape):
 
                 reorder_layers_afterseg()
 
+                highlight_layer_name = "Chemin sélectionné"
+
+                def update_highlighted_path(index):
+                    if highlight_layer_name in viewer.layers:
+                        viewer.layers.remove(highlight_layer_name)
+                    _, _, path = all_paths_recal[index]
+                    highlight = np.zeros(probas_volume.shape, dtype=np.uint8)
+                    
+                    for z, y, x in path:
+                        for dy in [-2, -1, 0, 1, 2]:
+                            for dx in [-2, -1, 0, 1, 2]:
+                                yy = y + dy
+                                xx = x + dx
+                                if 0 <= yy < highlight.shape[1] and 0 <= xx < highlight.shape[2]:
+                                    highlight[z, yy, xx] = 1
+
+                    viewer.add_labels(highlight, name=highlight_layer_name, opacity=1.0)
+                    label_layer = viewer.layers[highlight_layer_name]
+
+                current_path_index = [0]
+                def on_path_selected(index):
+                    current_path_index[0] = index
+                    update_highlighted_path(index)
+                from qtpy.QtWidgets import QComboBox
+                path_selector = QComboBox()
+                path_selector.currentIndexChanged.connect(on_path_selected)
+                adding_mode = [False]
+
+                btn_add_points = QPushButton("➕ Ajouter des points à ce chemin")
+                layout.addWidget(btn_add_points)
+
+                def toggle_add_mode():
+                    adding_mode[0] = not adding_mode[0]
+                    state = "activé" if adding_mode[0] else "désactivé"
+                    print(f"🖱️ Mode ajout de points {state}")
+
+                    volume_layer = viewer.layers["Volume"]
+                    
+                    if adding_mode[0]:
+                        # Sauvegarder les callbacks existants et les retirer
+                        global previous_mouse_callbacks
+                        previous_mouse_callbacks = list(volume_layer.mouse_drag_callbacks)
+                        volume_layer.mouse_drag_callbacks.clear()
+                        volume_layer.mouse_drag_callbacks.append(on_click_add_point)
+                    else:
+                        # Désactiver ajout de point et restaurer les anciens
+                        volume_layer.mouse_drag_callbacks.clear()
+                        for cb in previous_mouse_callbacks:
+                            volume_layer.mouse_drag_callbacks.append(cb)
+                        previous_mouse_callbacks.clear()
+
+                btn_add_points.clicked.connect(toggle_add_mode)
+                def reorder_layers_add():
+                    desired_order = ["Volume","Chemins colorés recalés","Chemin sélectionné","Chemins colorés","Composantes non utilisées", "Probabilités classe 1", "Segmentation"]
+
+                    for target_index, name in enumerate(reversed(desired_order)):
+                        for current_index, layer in enumerate(viewer.layers):
+                            if layer.name == name:
+                                viewer.layers.move(current_index, target_index)
+                                break
+
+                def interpolate_points(path_points):
+                    # path_points doit être trié par z croissant
+                    interpolated = []
+                    for i in range(len(path_points)-1):
+                        z0, y0, x0 = path_points[i]
+                        z1, y1, x1 = path_points[i+1]
+                        interpolated.append((z0, y0, x0))
+                        dz = z1 - z0
+                        if dz > 1:
+                            for z in range(z0 + 1, z1):
+                                alpha = (z - z0) / dz
+                                y = int(round((1 - alpha) * y0 + alpha * y1))
+                                x = int(round((1 - alpha) * x0 + alpha * x1))
+                                interpolated.append((z, y, x))
+                    interpolated.append(path_points[-1])
+                    return interpolated
+                
+                def on_click_add_point(layer, event):
+                    if not adding_mode[0]:
+                        return
+                    if event.type == 'mouse_press' and event.button == 1:
+                        pos = layer.world_to_data(event.position)
+                        z, y, x = map(int, pos)
+                        index = current_path_index[0]
+                        # Vérifie si un point avec ce z existe déjà dans le chemin
+                        if z not in [pt[0] for pt in all_paths_recal[index][2]]:
+                            print(f"➕ Ajout point ({z},{y},{x}) au chemin {index}")
+                            all_paths_recal[index][2].append((z, y, x))
+                            # Trie les points par z
+                            sorted_points = sorted(all_paths_recal[index][2])
+                            # Interpolation
+                            interpolated_points = interpolate_points(sorted_points)
+                            all_paths_recal[index] = (
+                                all_paths_recal[index][0],
+                                all_paths_recal[index][1],
+                                interpolated_points
+                            )
+                            update_highlighted_path(index)
+                            if "Chemins colorés recalés" in viewer.layers:
+                                viewer.layers.remove("Chemins colorés recalés")
+                                viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                                reorder_layers_add()
+                                viewer.layers.selection.active = viewer.layers["Volume"]
+                            
+                        else:
+                            print(f"⚠️ Le point avec z={z} existe déjà dans ce chemin, ajout ignoré.")
+                viewer.layers["Volume"].mouse_drag_callbacks.append(on_click_add_point)
+                
+
+                
+                for i in range(len(all_paths_recal)):
+                    path_selector.addItem(f"Chemin {i}", i)
+                path_selector.currentIndexChanged.connect(update_highlighted_path)
+                layout.addWidget(path_selector)
+
+                save_button_ref["path_selector"] = path_selector
+
+                # On affiche le premier chemin par défaut
+                update_highlighted_path(0)
+
+
                 viewer.layers["Probabilités classe 1"].visible = False
                 viewer.layers["Segmentation"].visible = False
                 viewer.layers["Chemins colorés"].visible = False
+                viewer.layers["Composantes non utilisées"].visible = False
                 viewer.layers.selection.active = viewer.layers["Volume"]
 
 

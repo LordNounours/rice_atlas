@@ -194,7 +194,7 @@ def get_extremities_from_volume(volume, zmax, z_window, min_size, low_corner, hi
         z_coords = coords[:, 0]
 
         if region.area < min_size:
-            discarded_mask[tuple(coords.T)] = 1
+            discarded_mask[tuple(coords.T)] = 255
             discarded_count += 1
             continue
 
@@ -207,14 +207,15 @@ def get_extremities_from_volume(volume, zmax, z_window, min_size, low_corner, hi
             z_min_points.append(tuple(z_min_point))
             filtered_count += 1
         else:
-            discarded_mask[tuple(coords.T)] = 1
+            discarded_mask[tuple(coords.T)] = 255
             discarded_count += 1
 
     print(f"Nombre final de composantes retenues : {filtered_count}")
     print(f"Nombre de composantes rejetées : {discarded_count}")
     z_min_points = sorted(z_min_points, key=lambda coord: coord[0])
     print("Liste des points (z_min, y, x) :", z_min_points)
-
+    
+    print("Valeurs uniques dans discarded_mask :", np.unique(discarded_mask))
     gc.collect()
 
     return z_min_points, discarded_mask
@@ -391,6 +392,6 @@ def run_tracking_pipeline(
 
     print("[✓] Pipeline de tracking terminé.")
 
-    return all_paths
+    return all_paths, discarded_mask
 
 
