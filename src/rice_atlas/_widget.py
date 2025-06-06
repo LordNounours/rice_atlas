@@ -12,6 +12,7 @@ import csv
 from pathlib import Path
 from scipy.ndimage import center_of_mass
 from PyQt5.QtCore import QTimer
+from qtpy.QtWidgets import QMessageBox
 if TYPE_CHECKING:
     import napari
 
@@ -538,6 +539,55 @@ def build_segment_volume_widget(volume_shape):
                             viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
                             reorder_layers_add()
                             viewer.layers.selection.active = viewer.layers["Volume"]
+
+                btn_delete_path = QPushButton("🗑️ Supprimer ce chemin")
+                layout.addWidget(btn_delete_path)
+
+                def delete_current_path():
+                    index = current_path_index[0]
+                    
+                    if index < 0 or index >= len(all_paths_recal):
+                        print("❌ Index de chemin invalide.")
+                        return
+
+                    confirm = QMessageBox.question(
+                        None,
+                        "Confirmer la suppression",
+                        f"Voulez-vous vraiment supprimer le chemin #{index} ?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+
+                    if confirm == QMessageBox.No:
+                        return
+
+                    print(f"🗑️ Suppression du chemin #{index}")
+                    
+                    # Supprimer le chemin
+                    all_paths_recal.pop(index)
+
+                    # Mise à jour du combo
+                    path_selector.clear()
+                    for i in range(len(all_paths_recal)):
+                        path_selector.addItem(f"Chemin {i}", i)
+
+                    if len(all_paths_recal) > 0:
+                        current_path_index[0] = 0
+                        update_highlighted_path(0)
+                    else:
+                        current_path_index[0] = -1
+                        if "Chemin sélectionné" in viewer.layers:
+                            viewer.layers.remove("Chemin sélectionné")
+
+                    if "Chemins colorés recalés" in viewer.layers:
+                        viewer.layers.remove("Chemins colorés recalés")
+                    if len(all_paths_recal) > 0:
+                        viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                    reorder_layers_add()
+                    viewer.layers.selection.active = viewer.layers["Volume"]
+
+                btn_delete_path.clicked.connect(delete_current_path)
+
+
 
                 def undo_last_manual_point():
                     index = current_path_index[0]
