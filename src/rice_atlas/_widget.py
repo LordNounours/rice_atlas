@@ -4,7 +4,7 @@ from magicgui import magic_factory
 from qtpy.QtWidgets import (
     QPushButton, QFileDialog, QWidget, QVBoxLayout, QHBoxLayout, QSpinBox, QLabel
 )
-from rice_atlas.predictor import segment_volume
+from rice_atlas.predictor import segment_volume_root,segment_volume_leaf
 from rice_atlas.tracking import run_tracking_pipeline
 from tifffile import imwrite, imread
 import random
@@ -86,7 +86,8 @@ def build_segment_volume_widget(volume_shape):
     max_z, max_y, max_x = volume_shape
     
     @magic_factory(
-        model_path={"widget_type": "FileEdit", "label": "Chemin du modèle", "mode": "r"},
+        model_root_path={"widget_type": "FileEdit", "label": "Chemin du modèle pour racines", "mode": "r"},
+        model_leaf_path={"widget_type": "FileEdit", "label": "Chemin du modèle pour feuilles", "mode": "r"},
         volume_path={"widget_type": "FileEdit", "label": "Volume à segmenter", "mode": "r"},
         output_path={"widget_type": "FileEdit", "label": "Fichier de sortie (optionnel)", "nullable": True, "mode": "w"},
         patch_size={"label": "Taille du patch", "min": 16, "max": 256, "step": 16},
@@ -99,7 +100,8 @@ def build_segment_volume_widget(volume_shape):
         click_mode={"label": "Mode clic", "widget_type": "ComboBox", "choices": ["Centre", "Coin bas gauche", "Coin haut droit"], "value": "Centre"},
     )
     def segment_volume_widget(
-        model_path: str,
+        model_root_path: str,
+        model_leaf_path: str,
         volume_path: str,
         output_path: str = None,
         patch_size: int = 128,
@@ -120,8 +122,8 @@ def build_segment_volume_widget(volume_shape):
         print(f"z max apres recup tap center : {z_max}")
 
         # Lancer la segmentation
-        probas_volume, segmented = segment_volume(
-            model_path=model_path,
+        probas_volume, segmented = segment_volume_root(
+            model_path=model_root_path,
             volume_path=volume_path,
             output_path=output_path,
             patch_size=patch_size,
@@ -132,8 +134,8 @@ def build_segment_volume_widget(volume_shape):
         )
 
         if viewer is not None:
-            probas_layer = viewer.add_image(probas_volume, name="Probabilités classe 1", colormap="gray")
-            seg_layer = viewer.add_labels( segmented, name="Segmentation")
+            viewer.add_image(probas_volume, name="Probabilités classe 1", colormap="gray")
+            viewer.add_labels( segmented, name="Segmentation")
             def reorder_layers():
                 desired_order = ["Volume", "Probabilités classe 1", "Segmentation"]
 
@@ -450,10 +452,11 @@ def build_segment_volume_widget(volume_shape):
                 layout.addWidget(btn_add_points)
                 previous_mouse_callbacks = []
                 def toggle_add_mode():
+                    viewer.layers.selection.active = viewer.layers["Volume"]
                     adding_mode[0] = not adding_mode[0]
                     state = "activé" if adding_mode[0] else "désactivé"
                     print(f"🖱️ Mode ajout de points {state}")
-
+                    
                     volume_layer = viewer.layers["Volume"]
                     
                     if adding_mode[0]:
