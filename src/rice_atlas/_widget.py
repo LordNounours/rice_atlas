@@ -313,7 +313,7 @@ def build_segment_volume_widget(volume_shape):
                 )
                 print("✅ Tracking terminé.")
                 volume = imread(volume_path)
-                slice_size = 16
+                slice_size = 20
                 all_paths_recal = []
                 n_iter = 15
                 for seed, score, path in all_paths:
@@ -332,6 +332,7 @@ def build_segment_volume_widget(volume_shape):
                         for z, y, x in path:
                             color_mask[z, y, x] = color
                     return color_mask
+                
                 if "Zone sélectionnée" in viewer.layers:
                     viewer.layers.remove("Zone sélectionnée")
 
@@ -645,6 +646,9 @@ def build_segment_volume_widget(volume_shape):
                 viewer.layers["Composantes non utilisées"].visible = False
                 viewer.layers.selection.active = viewer.layers["Volume"]
 
+                def save_updated_segmentation() :
+                    all_paths_recal
+                    segmented
 
 
                 def save_colored_paths():
@@ -682,6 +686,44 @@ def build_segment_volume_widget(volume_shape):
                             slice_ = volume[z, y - half : y + half, x - half : x + half]
                             imwrite(str(root_dir / f"{z}.tif"), slice_.astype(volume.dtype))
                     print(f"✅ Slices extraites dans : {dir_path}")
+
+                from scipy.ndimage import binary_dilation
+                def extract_structure_with_dilation(segmented, all_paths_recal, dilation_radius=2):
+                    print("🚀 Début dilatation optimisée")
+                    output_mask = np.zeros_like(segmented, dtype=np.uint8)
+
+                    # Structure de dilatation 2D pré-calculée (carré ici, disque possible avec distance si tu veux)
+                    struct = np.ones((2*dilation_radius+1, 2*dilation_radius+1), dtype=bool)
+
+                    # Groupement par slice Z pour éviter de traiter z plusieurs fois
+                    from collections import defaultdict
+                    points_by_slice = defaultdict(list)
+
+                    for path in all_paths_recal:
+                        for z, y, x in path[2]:
+                            if 0 <= z < segmented.shape[0] and 0 <= y < segmented.shape[1] and 0 <= x < segmented.shape[2]:
+                                points_by_slice[z].append((y, x))
+
+                    # Appliquer dilatation slice par slice
+                    for z, points in points_by_slice.items():
+                        slice_mask = np.zeros(segmented.shape[1:], dtype=bool)
+                        for y, x in points:
+                            slice_mask[y, x] = True
+
+                        dilated = binary_dilation(slice_mask, structure=struct)
+                        output_mask[z][dilated] = 255
+
+                    return output_mask
+
+
+                def on_add_output_mask():
+                    # On suppose que segmented et all_paths_recal sont accessibles ici (ou passent en argument)
+                    output_mask = extract_structure_with_dilation(segmented, all_paths_recal)
+                    viewer.add_image(output_mask, name="Output Mask Interpolé", blending='additive', opacity=0.5)
+
+                btn_add_mask = QPushButton("Afficher masque interpolé")
+                btn_add_mask.clicked.connect(on_add_output_mask)
+                layout.addWidget(btn_add_mask)
 
                 btn_save_colored = QPushButton("Sauvegarder chemins colorés")
                 btn_save_colored.clicked.connect(save_colored_paths)
