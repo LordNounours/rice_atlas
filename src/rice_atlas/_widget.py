@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from magicgui import magic_factory
 from qtpy.QtWidgets import (
-    QPushButton, QFileDialog, QWidget, QVBoxLayout, QHBoxLayout, QSpinBox, QLabel
+    QPushButton, QFileDialog, QWidget, QVBoxLayout, QHBoxLayout, QSpinBox, QLabel,QLineEdit
 )
 from rice_atlas.predictor import segment_volume_root,segment_volume_leaf
 from rice_atlas.tracking import run_tracking_pipeline
@@ -11,6 +11,8 @@ import random
 import csv
 from pathlib import Path
 from scipy.ndimage import center_of_mass
+
+from skimage.draw import disk
 from PyQt5.QtCore import QTimer
 from qtpy.QtWidgets import QMessageBox
 if TYPE_CHECKING:
@@ -19,7 +21,7 @@ if TYPE_CHECKING:
 save_button_ref = {}
 segmentation_dock_ref = {}
 previous_mouse_callbacks = []
-
+path_names = {}
 
 @magic_factory(call_button="Charger un volume")
 def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
@@ -313,9 +315,9 @@ def build_segment_volume_widget(volume_shape):
                 )
                 print("✅ Tracking terminé.")
                 volume = imread(volume_path)
-                slice_size = 20
+                slice_size = 16
                 all_paths_recal = []
-                n_iter = 15
+                n_iter = 20
                 for seed, score, path in all_paths:
                     new_path = []
                     for z, y, x in path:
@@ -325,19 +327,31 @@ def build_segment_volume_widget(volume_shape):
                     all_paths_recal.append((seed, score, new_path))
                 print("🧠 Chemins recalés")
 
-                def make_color_mask(paths):
-                    color_mask = np.zeros(probas_volume.shape + (3,), dtype=np.uint8)
+                def make_color_mask(paths, shape, radius=3):
+                    """
+                    Crée un masque coloré avec des disques autour des points donnés.
+
+                    :param paths: liste de tuples (non utilisé, non utilisé, path), où path est une liste de (z, y, x)
+                    :param shape: shape du volume (z, y, x)
+                    :param radius: rayon du disque en pixels (dans le plan yx)
+                    :return: masque RGB (z, y, x, 3)
+                    """
+                    color_mask = np.zeros(shape + (3,), dtype=np.uint8)
+                    
                     for idx, (_, _, path) in enumerate(paths):
                         color = tuple(random.choices(range(50, 256), k=3))
                         for z, y, x in path:
-                            color_mask[z, y, x] = color
+                            if 0 <= z < shape[0]:
+                                rr, cc = disk((y, x), radius, shape=shape[1:])  # disk dans le plan (y, x)
+                                color_mask[z, rr, cc] = color  # applique la couleur dans ce plan
+
                     return color_mask
-                
+                                
                 if "Zone sélectionnée" in viewer.layers:
                     viewer.layers.remove("Zone sélectionnée")
 
-                viewer.add_image(make_color_mask(all_paths), name="Chemins colorés")
-                viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                viewer.add_image(make_color_mask(all_paths,segmented.shape), name="Chemins colorés")
+                viewer.add_image(make_color_mask(all_paths_recal,segmented.shape), name="Chemins colorés recalés")
                 viewer.add_image(discarded_mask, name="Composantes non utilisées",colormap="red",opacity=0.5)
                 from collections import defaultdict
                 manual_points_stack = defaultdict(list)
@@ -378,6 +392,26 @@ def build_segment_volume_widget(volume_shape):
                 from qtpy.QtWidgets import QComboBox
                 path_selector = QComboBox()
                 path_selector.currentIndexChanged.connect(on_path_selected)
+                name_editor = QLineEdit()
+
+                def update_name_editor(index):
+                    name = path_names.get(index, f"Chemin {index}")
+                    name_editor.setText(name)
+
+                
+                path_selector.currentIndexChanged.connect(update_name_editor)
+
+                def rename_path():
+                    index = path_selector.currentIndex()
+                    new_name = name_editor.text().strip()
+                    if new_name:
+                        path_names[index] = new_name
+                        path_selector.setItemText(index, new_name)
+                        print(f"✏️ Chemin {index} renommé en : {new_name}")
+
+                name_editor.editingFinished.connect(rename_path)   
+                layout.addWidget(name_editor)
+                save_button_ref["name_editor"] = name_editor
                 adding_mode = [False]
                 creating_new_path_mode = [False]
                 new_path_points = []
@@ -439,13 +473,15 @@ def build_segment_volume_widget(volume_shape):
 
                     if "Chemins colorés recalés" in viewer.layers:
                         viewer.layers.remove("Chemins colorés recalés")
-                    viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                    viewer.add_image(make_color_mask(all_paths_recal,segmented.shape), name="Chemins colorés recalés")
                     reorder_layers_add()
                     viewer.layers.selection.active = viewer.layers["Volume"]
 
                     # Reset
                     new_path_points.clear()
                     toggle_create_new_path_mode()  # désactive le mode création
+                    path_names[new_index] = f"Chemin {new_index}"
+                    path_selector.addItem(path_names[new_index], new_index)
 
                 btn_validate_new_path.clicked.connect(validate_new_path)
 
@@ -540,7 +576,7 @@ def build_segment_volume_widget(volume_shape):
                         update_highlighted_path(index)
                         if "Chemins colorés recalés" in viewer.layers:
                             viewer.layers.remove("Chemins colorés recalés")
-                            viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                            viewer.add_image(make_color_mask(all_paths_recal,segmented.shape), name="Chemins colorés recalés")
                             reorder_layers_add()
                             viewer.layers.selection.active = viewer.layers["Volume"]
 
@@ -572,7 +608,8 @@ def build_segment_volume_widget(volume_shape):
                     # Mise à jour du combo
                     path_selector.clear()
                     for i in range(len(all_paths_recal)):
-                        path_selector.addItem(f"Chemin {i}", i)
+                        name = path_names.get(i, f"Chemin {i}")
+                        path_selector.addItem(name, i)
 
                     if len(all_paths_recal) > 0:
                         current_path_index[0] = 0
@@ -585,9 +622,10 @@ def build_segment_volume_widget(volume_shape):
                     if "Chemins colorés recalés" in viewer.layers:
                         viewer.layers.remove("Chemins colorés recalés")
                     if len(all_paths_recal) > 0:
-                        viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                        viewer.add_image(make_color_mask(all_paths_recal,segmented.shape), name="Chemins colorés recalés")
                     reorder_layers_add()
                     viewer.layers.selection.active = viewer.layers["Volume"]
+                    path_names.pop(index, None)
 
                 btn_delete_path.clicked.connect(delete_current_path)
 
@@ -618,7 +656,7 @@ def build_segment_volume_widget(volume_shape):
                     update_highlighted_path(index)
                     if "Chemins colorés recalés" in viewer.layers:
                         viewer.layers.remove("Chemins colorés recalés")
-                        viewer.add_image(make_color_mask(all_paths_recal), name="Chemins colorés recalés")
+                        viewer.add_image(make_color_mask(all_paths_recal,segmented.shape), name="Chemins colorés recalés")
                         reorder_layers_add()
                         viewer.layers.selection.active = viewer.layers["Volume"]
 
@@ -654,76 +692,197 @@ def build_segment_volume_widget(volume_shape):
                 def save_colored_paths():
                     save_path, _ = QFileDialog.getSaveFileName(caption="Enregistrer les chemins colorés", filter="*.tif")
                     if save_path:
-                        imwrite(save_path, make_color_mask(all_paths_recal).astype(np.uint8))
+                        imwrite(save_path, make_color_mask(all_paths_recal,segmented.shape).astype(np.uint8))
                         print(f"✅ Chemins colorés sauvegardés à : {save_path}")
 
                 def save_paths_to_csv():
                     dir_path = QFileDialog.getExistingDirectory(caption="Choisir un dossier pour les CSV")
                     if dir_path:
                         for idx, (_, _, path) in enumerate(all_paths_recal):
-                            with open(Path(dir_path) / f"{idx}.csv", "w", newline="") as f:
+                            safe_name = path_names.get(idx, f"Chemin_{idx}").replace(" ", "_")
+                            with open(Path(dir_path) / f"{safe_name}.csv", "w", newline="") as f:
                                 writer = csv.writer(f)
                                 writer.writerow(["X", "Y", "Z"])
                                 for z, y, x in path:
                                     writer.writerow([x, y, z])
                         print(f"✅ {len(all_paths_recal)} chemins enregistrés")
+                
+                def trilinear_interpolation(volume, coords):
+                    """
+                    Interpolation trilineaire dans un volume 3D.
 
+                    Args:
+                        volume (np.ndarray): volume 3D (Z, Y, X)
+                        coords (np.ndarray): coordonnées flottantes (3, H, W) sous forme (z, y, x)
+
+                    Returns:
+                        np.ndarray: image interpolée de taille (H, W)
+                    """
+                    z, y, x = coords
+
+                    z0 = np.floor(z).astype(int)
+                    z1 = z0 + 1
+                    y0 = np.floor(y).astype(int)
+                    y1 = y0 + 1
+                    x0 = np.floor(x).astype(int)
+                    x1 = x0 + 1
+
+                    # Clip aux bornes pour ne pas sortir du volume
+                    z0 = np.clip(z0, 0, volume.shape[0] - 1)
+                    z1 = np.clip(z1, 0, volume.shape[0] - 1)
+                    y0 = np.clip(y0, 0, volume.shape[1] - 1)
+                    y1 = np.clip(y1, 0, volume.shape[1] - 1)
+                    x0 = np.clip(x0, 0, volume.shape[2] - 1)
+                    x1 = np.clip(x1, 0, volume.shape[2] - 1)
+
+                    # Poids d'interpolation
+                    dz = z - z0
+                    dy = y - y0
+                    dx = x - x0
+
+                    # Interpolation trilineaire
+                    c000 = volume[z0, y0, x0]
+                    c001 = volume[z0, y0, x1]
+                    c010 = volume[z0, y1, x0]
+                    c011 = volume[z0, y1, x1]
+                    c100 = volume[z1, y0, x0]
+                    c101 = volume[z1, y0, x1]
+                    c110 = volume[z1, y1, x0]
+                    c111 = volume[z1, y1, x1]
+
+                    c00 = c000 * (1 - dx) + c001 * dx
+                    c01 = c010 * (1 - dx) + c011 * dx
+                    c10 = c100 * (1 - dx) + c101 * dx
+                    c11 = c110 * (1 - dx) + c111 * dx
+
+                    c0 = c00 * (1 - dy) + c01 * dy
+                    c1 = c10 * (1 - dy) + c11 * dy
+
+                    c = c0 * (1 - dz) + c1 * dz
+
+                    return c
+                
+                from vedo import utils
+
+                def interpolate_with_local_frames(path_points, step=1.0):
+                    """
+                    Interpole la courbe avec un pas régulier en distance curviligne,
+                    et calcule une base locale (orthonormée) pour chaque point interpolé.
+
+                    Args:
+                        path_points (list of (z, y, x)): points de la courbe.
+                        step (float): distance entre les points interpolés.
+
+                    Returns:
+                        list of dicts with keys:
+                            - point: (z, y, x)
+                            - axis0: vecteur orthogonal 1 (ex: "horizontal")
+                            - axis1: vecteur orthogonal 2 (ex: "vertical")
+                            - axis2: vecteur directeur (tangente)
+                    """
+
+                    if len(path_points) < 2:
+                        return []
+
+                    # Convertir en np.array en (x, y, z) pour faciliter calculs
+                    path_xyz = [np.array([x, y, z]) for z, y, x in path_points]
+
+                    # Calcul des distances cumulées le long de la courbe
+                    cumulative_d = [0.0]
+                    for i in range(1, len(path_xyz)):
+                        d = np.linalg.norm(path_xyz[i] - path_xyz[i - 1])
+                        cumulative_d.append(cumulative_d[-1] + d)
+
+                    total_length = cumulative_d[-1]
+                    sample_distances = np.arange(0, total_length + step, step)
+
+                    xs = [pt[0] for pt in path_xyz]
+                    ys = [pt[1] for pt in path_xyz]
+                    zs = [pt[2] for pt in path_xyz]
+
+                    x_interp = np.interp(sample_distances, cumulative_d, xs)
+                    y_interp = np.interp(sample_distances, cumulative_d, ys)
+                    z_interp = np.interp(sample_distances, cumulative_d, zs)
+
+                    points_interp = [np.array([x, y, z]) for x, y, z in zip(x_interp, y_interp, z_interp)]
+
+                    results = []
+                    for i in range(len(points_interp)):
+                        p = points_interp[i]
+
+                        # Tangente locale (axis2)
+                        if i == 0:
+                            v = points_interp[i + 1] - p
+                        elif i == len(points_interp) - 1:
+                            v = p - points_interp[i - 1]
+                        else:
+                            v = points_interp[i + 1] - points_interp[i - 1]
+
+                        axis2 = utils.versor(v)
+
+                        # Choix d'un vecteur de référence pour la base locale
+                        ref = np.array([1, 0, 0]) if abs(axis2[0]) < min(abs(axis2[1]), abs(axis2[2])) \
+                            else np.array([0, 1, 0]) if abs(axis2[1]) < abs(axis2[2]) else np.array([0, 0, 1])
+
+                        axis0 = utils.versor(np.cross(ref, axis2))
+                        axis1 = utils.versor(np.cross(axis2, axis0))
+
+                        # Retour à (z, y, x) en int pour point
+                        point_int = tuple(map(int, (p[2], p[1], p[0])))
+
+                        results.append({
+                            'point': point_int,
+                            'axis0': axis0,
+                            'axis1': axis1,
+                            'axis2': axis2
+                        })
+
+                    return results
                 def extract_root_slices():
                     dir_path = QFileDialog.getExistingDirectory(caption="Dossier des slices racines")
                     if not dir_path:
                         return
-                    half = 32
+
+                    half = 64  # moitié taille de la coupe en pixels
                     for idx, (_, _, path) in enumerate(all_paths_recal):
                         root_dir = Path(dir_path) / f"root_{idx}"
                         root_dir.mkdir(parents=True, exist_ok=True)
-                        for z, y, x in path:
-                            if (
-                                y - half < 0 or y + half >= volume.shape[1]
-                                or x - half < 0 or x + half >= volume.shape[2]
-                                or z < 0 or z >= volume.shape[0]
-                            ):
+
+                        # Calcul de la base locale sur le chemin (à adapter si besoin)
+                        frames = interpolate_with_local_frames(path, step=1.0)
+
+                        for frame in frames:
+                            z, y, x = frame['point']
+                            axis0, axis1, axis2 = frame['axis0'], frame['axis1'], frame['axis2']
+
+                            # Vérifier les bornes (volume.shape = (Z, Y, X))
+                            if not (0 <= z < volume.shape[0]):
                                 continue
-                            slice_ = volume[z, y - half : y + half, x - half : x + half]
-                            imwrite(str(root_dir / f"{z}.tif"), slice_.astype(volume.dtype))
+
+                            # Construire un plan 2D dans le volume autour de (z,y,x) orthogonal à axis2
+                            # Exemple : créer une grille 2D autour de (0,0) dans le repère local (axis0, axis1)
+                            yy, xx = np.meshgrid(np.arange(-half, half), np.arange(-half, half), indexing='ij')
+
+                            # Points du patch dans le repère global
+                            coords = (np.array([x, y, z]) +
+                                    xx[..., None] * axis0 +
+                                    yy[..., None] * axis1)  # forme (patch_size, patch_size, 3)
+
+                            # coords sont en (X, Y, Z) flottants — il faut les réorganiser et interpoler dans volume
+
+                            # Réorganiser coords pour accès volume : volume[z, y, x]
+                            sample_coords = np.stack([coords[..., 2], coords[..., 1], coords[..., 0]], axis=0)  # (3, H, W)
+
+                            # Interpolation trilineaire pour extraire la slice orientée
+                            slice_ = trilinear_interpolation(volume, sample_coords)
+
+                            # Sauvegarder la slice
+                            imwrite(str(root_dir / f"{z}_{y}_{x}.tif"), slice_.astype(volume.dtype))
+
                     print(f"✅ Slices extraites dans : {dir_path}")
 
-                from scipy.ndimage import binary_dilation
-                def extract_structure_with_dilation(segmented, all_paths_recal, dilation_radius=2):
-                    print("🚀 Début dilatation optimisée")
-                    output_mask = np.zeros_like(segmented, dtype=np.uint8)
-
-                    # Structure de dilatation 2D pré-calculée (carré ici, disque possible avec distance si tu veux)
-                    struct = np.ones((2*dilation_radius+1, 2*dilation_radius+1), dtype=bool)
-
-                    # Groupement par slice Z pour éviter de traiter z plusieurs fois
-                    from collections import defaultdict
-                    points_by_slice = defaultdict(list)
-
-                    for path in all_paths_recal:
-                        for z, y, x in path[2]:
-                            if 0 <= z < segmented.shape[0] and 0 <= y < segmented.shape[1] and 0 <= x < segmented.shape[2]:
-                                points_by_slice[z].append((y, x))
-
-                    # Appliquer dilatation slice par slice
-                    for z, points in points_by_slice.items():
-                        slice_mask = np.zeros(segmented.shape[1:], dtype=bool)
-                        for y, x in points:
-                            slice_mask[y, x] = True
-
-                        dilated = binary_dilation(slice_mask, structure=struct)
-                        output_mask[z][dilated] = 255
-
-                    return output_mask
 
 
-                def on_add_output_mask():
-                    # On suppose que segmented et all_paths_recal sont accessibles ici (ou passent en argument)
-                    output_mask = extract_structure_with_dilation(segmented, all_paths_recal)
-                    viewer.add_image(output_mask, name="Output Mask Interpolé", blending='additive', opacity=0.5)
-
-                btn_add_mask = QPushButton("Afficher masque interpolé")
-                btn_add_mask.clicked.connect(on_add_output_mask)
-                layout.addWidget(btn_add_mask)
 
                 btn_save_colored = QPushButton("Sauvegarder chemins colorés")
                 btn_save_colored.clicked.connect(save_colored_paths)
