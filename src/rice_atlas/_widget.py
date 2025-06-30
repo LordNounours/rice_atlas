@@ -286,22 +286,32 @@ def build_segment_volume_widget(volume_shape):
             corners_container.show()
             save_button_ref["corners_container"] = corners_container
 
-            def recentre_point_local_volume(volume, z, y, x, win_size=64, threshold=10):
+            def recentre_point_local_volume(volume, z, y, x, win_size=64):
                 half = win_size // 2
                 y_min = max(0, y - half)
                 y_max = min(volume.shape[1], y + half)
                 x_min = max(0, x - half)
                 x_max = min(volume.shape[2], x + half)
+
                 patch = volume[z, y_min:y_max, x_min:x_max]
-                mask = patch > threshold
-                if np.sum(mask) == 0:
+
+                if np.sum(patch) == 0:
                     return y, x
-                com_y_patch, com_x_patch = center_of_mass(patch * mask)
+
+                com = center_of_mass(patch)
+
+                if np.any(np.isnan(com)):
+                    return y, x  # Fallback si le COM échoue
+
+                com_y_patch, com_x_patch = com
                 com_y = y_min + com_y_patch
                 com_x = x_min + com_x_patch
+
                 new_y = max(0, min(volume.shape[1] - 1, int(round(com_y))))
                 new_x = max(0, min(volume.shape[2] - 1, int(round(com_x))))
+
                 return new_y, new_x
+
 
             def run_tracking_with_corners():
                 low_corner = (low_corner_x.value(), low_corner_y.value())
@@ -322,7 +332,7 @@ def build_segment_volume_widget(volume_shape):
                     new_path = []
                     for z, y, x in path:
                         for _ in range(n_iter):
-                            y, x = recentre_point_local_volume(volume, z, y, x, slice_size, 10)
+                            y, x = recentre_point_local_volume(probas_volume, z, y, x, slice_size)
                         new_path.append((z, y, x))
                     all_paths_recal.append((seed, score, new_path))
                 print("🧠 Chemins recalés")
