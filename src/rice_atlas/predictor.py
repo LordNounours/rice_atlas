@@ -5,39 +5,45 @@ import tifffile as tiff
 from torch import nn
 from tqdm import tqdm
 from rice_atlas.model.segformer3d import SegFormer3D  
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter,binary_dilation
 from typing import Tuple
+from rice_atlas import denoise
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-def preprocess_volume(volume: np.ndarray, threshold: int = 120, sigma: float = 1.0) -> np.ndarray:
+def preprocess_large_volume(volume, threshold=120, sigma=1.0):
+    """
+    Applique un prétraitement slice par slice à un volume 3D numpy,
+    et retourne le volume traité en mémoire.
+
+    Parameters:
+        volume (np.ndarray): Volume 3D (z, y, x).
+        threshold (int): Seuil pour la suppression des voisins.
+        sigma (float): Paramètre du filtre gaussien.
+
+    Returns:
+        np.ndarray: Volume prétraité (uint8).
+    """
+    if volume.ndim != 3:
+        raise ValueError("Le volume doit être un tableau 3D (z, y, x)")
+
     processed_slices = []
 
-    for slice_idx in range(volume.shape[0]):
-        image = volume[slice_idx]
-        neighbors_image = np.zeros_like(image)
-        thresholded_image = image >= threshold
+    for idx in tqdm(range(volume.shape[0]), desc="Prétraitement des slices"):
+        image = volume[idx]
 
-        rows, cols = image.shape
-        for i in range(1, rows - 1):
-            for j in range(1, cols - 1):
-                if thresholded_image[i, j]:
-                    for di in [-1, 0, 1]:
-                        for dj in [-1, 0, 1]:
-                            if di == 0 and dj == 0:
-                                continue
-                            ni, nj = i + di, j + dj
-                            if 0 <= ni < rows and 0 <= nj < cols:
-                                neighbors_image[ni, nj] = 255
+        if image.ndim > 2:
+            raise ValueError("Chaque slice doit être en niveaux de gris")
 
-        updated_image = image.copy()
-        updated_image[neighbors_image == 255] = 0
-        processed_slices.append(updated_image)
+        neighbors = denoise.suppress_neighbors(image.astype(np.uint8), threshold)
+        updated = image.copy()
+        updated[neighbors == 255] = 0
+        filtered = gaussian_filter(updated, sigma=sigma)
 
-    processed_stack = np.array(processed_slices, dtype=np.float32)
-    smoothed_stack = gaussian_filter(processed_stack, sigma=sigma)
-    smoothed_stack = np.clip(smoothed_stack, 0, 255).astype(np.uint8)
+        final = np.clip(filtered, 0, 255).astype(np.uint8)
+        processed_slices.append(final)
 
-    return smoothed_stack
+    return np.stack(processed_slices)
+
 
 def load_model(model_path, model_architecture):
     if not os.path.exists(model_path):
@@ -95,10 +101,10 @@ def predict_patches_batch(model, patches_tensor):
 
 def segment_volume_root(
     model_path: str,
-    volume_path: str,
+    volume: np.ndarray,
     output_path: str = None,
     patch_size: int = 128,
-    stride: int = 96,
+    stride: int = 112,
     batch_size: int = 16,
     pretreatment: bool = False,
     tap_center: Tuple[int, int, int] = (0, 0, 0),
@@ -106,16 +112,12 @@ def segment_volume_root(
     print("🔄 Chargement du modèle...")
     model = load_model(model_path, SegFormer3D)
 
-    print(f"🔄 Chargement du volume depuis {volume_path}")
-    volume = tiff.imread(volume_path)
-
     if pretreatment:
         print("🔄 Application du prétraitement...")
-        volume = preprocess_volume(volume)
+        volume = preprocess_large_volume(volume)
 
     shape = volume.shape
-    probas_volume = np.zeros(shape, dtype=np.float32)
-    count_map = np.zeros(shape, dtype=np.float32)
+
 
     coords_list = compute_patch_coords(shape, patch_size, stride)
 
@@ -123,6 +125,15 @@ def segment_volume_root(
     max_z = int(tap_center[2]) + 100
     filtered_coords = [coord for coord in coords_list if coord[0] <= max_z]
 
+    coords_array = np.array(filtered_coords)
+    zmin, ymin, xmin = coords_array.min(axis=0)
+    zmax = coords_array[:, 0].max() + patch_size
+    ymax = coords_array[:, 1].max() + patch_size
+    xmax = coords_array[:, 2].max() + patch_size
+
+    subshape = (zmax - zmin, ymax - ymin, xmax - xmin)
+    probas_volume = np.zeros(subshape, dtype=np.float32)
+    count_map = np.zeros(subshape, dtype=np.float32)
     print(f"🚀 Prédiction sur {len(filtered_coords)} patches (limité par tap_center z={max_z})...")
 
     buffer, buffer_coords = [], []
@@ -142,8 +153,12 @@ def segment_volume_root(
                 dy = min(patch_size, shape[1] - y)
                 dx = min(patch_size, shape[2] - x)
 
-                probas_volume[z:z+dz, y:y+dy, x:x+dx] += patch_prob[:dz, :dy, :dx]
-                count_map[z:z+dz, y:y+dy, x:x+dx] += 1
+                probas_volume[z - zmin:z - zmin + dz,
+                            y - ymin:y - ymin + dy,
+                            x - xmin:x - xmin + dx] += patch_prob[:dz, :dy, :dx]
+                count_map[z - zmin:z - zmin + dz,
+                        y - ymin:y - ymin + dy,
+                        x - xmin:x - xmin + dx] += 1
 
             buffer, buffer_coords = [], []
 
@@ -156,23 +171,20 @@ def segment_volume_root(
             dy = min(patch_size, shape[1] - y)
             dx = min(patch_size, shape[2] - x)
 
-            probas_volume[z:z+dz, y:y+dy, x:x+dx] += patch_prob[:dz, :dy, :dx]
-            count_map[z:z+dz, y:y+dy, x:x+dx] += 1
+            probas_volume[z - zmin:z - zmin + dz,
+                y - ymin:y - ymin + dy,
+                x - xmin:x - xmin + dx] += patch_prob[:dz, :dy, :dx]
+            count_map[z - zmin:z - zmin + dz,
+                y - ymin:y - ymin + dy,
+                x - xmin:x - xmin + dx] += 1
 
-    print("📊 Moyennage des probabilités (zone prédite uniquement)...")
 
-    # ➕ Moyenne uniquement sur la zone réellement prédite
-    zs, ys, xs = zip(*filtered_coords)
-    zmin, zmax = min(zs), max(zs) + patch_size
-    ymin, ymax = min(ys), max(ys) + patch_size
-    xmin, xmax = min(xs), max(xs) + patch_size
+    print("📊 Moyennage des probabilités par blocs...")
+    average_predictions_in_chunks(probas_volume, count_map, block_size=32)
 
-    sub_count = count_map[zmin:zmax, ymin:ymax, xmin:xmax]
-    sub_count[sub_count == 0] = 1
+    print("Fin de moyennage")
+    binary_segmentation = binarize_to_memmap(probas_volume, threshold=0.5)
 
-    probas_volume[zmin:zmax, ymin:ymax, xmin:xmax] /= sub_count
-
-    binary_segmentation = (probas_volume >= 0.5).astype(np.uint8)
     print("Valeurs uniques (segmentation binaire) :", np.unique(binary_segmentation))
 
     if output_path:
@@ -181,15 +193,63 @@ def segment_volume_root(
             for z in tqdm(range(binary_segmentation.shape[0]), desc="📸 Sauvegarde des slices"):
                 tif.write(binary_segmentation[z], contiguous=True)
 
-    return probas_volume, binary_segmentation
+    return probas_volume, binary_segmentation , (zmin,ymin,xmin)
 
+
+def average_predictions_in_chunks(probas_volume, count_map, block_size=32):
+    z_max, y_max, x_max = probas_volume.shape
+
+    for z in range(0, z_max, block_size):
+        for y in range(0, y_max, block_size):
+            for x in range(0, x_max, block_size):
+                z_end = min(z + block_size, z_max)
+                y_end = min(y + block_size, y_max)
+                x_end = min(x + block_size, x_max)
+
+                # Extraire blocs
+                p_block = probas_volume[z:z_end, y:y_end, x:x_end]
+                c_block = count_map[z:z_end, y:y_end, x:x_end]
+
+                # Éviter division par 0
+                nonzero_mask = c_block > 0
+
+                # Diviser uniquement où count > 0
+                p_block[nonzero_mask] = (
+                    p_block[nonzero_mask] / c_block[nonzero_mask]
+                )
+
+                # Remettre dans le volume
+                probas_volume[z:z_end, y:y_end, x:x_end] = p_block
+
+
+def binarize_to_memmap(
+    probas_volume: np.ndarray,
+    threshold: float = 0.5,
+    mmap_path: str = "temp/binary_segmentation.dat",
+    flush_every: int = 256,  # nombre de slices avant flush
+) -> np.memmap:
+    os.makedirs(os.path.dirname(mmap_path), exist_ok=True)
+
+    shape = probas_volume.shape
+    binary_seg = np.memmap(mmap_path, dtype=np.uint8, mode="w+", shape=shape)
+
+    for z in tqdm(range(shape[0]), desc="Binarisation memmap slice par slice"):
+        np.greater_equal(probas_volume[z], threshold, out=probas_volume[z])  # in-place
+        binary_seg[z] = probas_volume[z].astype(np.uint8)
+
+        # Flush périodique (évite de trop buffer, mais ne flush pas trop souvent)
+        if flush_every and (z + 1) % flush_every == 0:
+            binary_seg.flush()
+
+    binary_seg.flush()  # dernier flush
+    return binary_seg
 
 def segment_volume_leaf(
     model_path: str,
     volume_path: str,
     output_path: str = None,
     patch_size: int = 128,
-    stride: int = 96,
+    stride: int = 112,
     batch_size: int = 16,
     pretreatment: bool = False,
     tap_center: Tuple[int, int, int] = (0, 0, 0),
@@ -202,7 +262,7 @@ def segment_volume_leaf(
 
     if pretreatment:
         print("🔄 Application du prétraitement...")
-        volume = preprocess_volume(volume)
+        volume = preprocess_large_volume(volume)
 
     shape = volume.shape
     probas_volume = np.zeros(shape, dtype=np.float32)

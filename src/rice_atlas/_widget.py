@@ -49,6 +49,7 @@ def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
         # Crée et ajoute un nouveau widget de segmentation
         seg_widget_factory = build_segment_volume_widget(volume.shape)
         seg_widget = seg_widget_factory()
+        seg_widget.loaded_volume = volume 
         QTimer.singleShot(0, lambda: getattr(seg_widget, "click_mode", None) and seg_widget.click_mode.native.setVisible(False))
 
         seg_widget.volume_path.value = str(path)
@@ -116,6 +117,7 @@ def build_segment_volume_widget(volume_shape):
         viewer: "napari.viewer.Viewer" = None,
         click_mode: str = "Centre",
     ) -> None:
+        volume = segment_volume_widget.loaded_volume
         tap_center = (tap_x, tap_y, tap_z)
         print(f"Viewer :  {viewer}")
         print(f"📍 Centre du plateau sélectionné : {tap_center}")
@@ -124,9 +126,9 @@ def build_segment_volume_widget(volume_shape):
         print(f"z max apres recup tap center : {z_max}")
 
         # Lancer la segmentation
-        probas_volume, segmented = segment_volume_root(
+        probas_volume, segmented ,(zmin_root,ymin_root,xmin_root) = segment_volume_root(
             model_path=model_root_path,
-            volume_path=volume_path,
+            volume=volume,
             output_path=output_path,
             patch_size=patch_size,
             stride=stride,
@@ -191,6 +193,7 @@ def build_segment_volume_widget(volume_shape):
 
 
 
+        
 
         # Nettoyer anciens boutons/docks liés à la sauvegarde
         for btn_key in ["save_button_proba", "save_button_segmented", "save_button_tracking", "corners_container", "btn_run_tracking", "save_button_csv", "btn_extract_slices"]:
@@ -324,7 +327,6 @@ def build_segment_volume_widget(volume_shape):
                     probas_volume=probas_volume, segmented=segmented
                 )
                 print("✅ Tracking terminé.")
-                volume = imread(volume_path)
                 slice_size = 16
                 all_paths_recal = []
                 n_iter = 20
@@ -866,7 +868,7 @@ def build_segment_volume_widget(volume_shape):
                             axis0, axis1, axis2 = frame['axis0'], frame['axis1'], frame['axis2']
 
                             # Vérifier les bornes (volume.shape = (Z, Y, X))
-                            if not (0 <= z < volume.shape[0]):
+                            if not (0 <= z <volume.shape[0]):
                                 continue
 
                             # Construire un plan 2D dans le volume autour de (z,y,x) orthogonal à axis2

@@ -3,7 +3,8 @@ name = "rice-atlas"
 dynamic = ["version"]
 description = "A plugin allowing the user to load a tiff file of a rice plant and from it automatically find the roots and leaves."
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "LGPL-3.0-or-later"
+
 authors = [
   {name = "Thomas CARO"},
   {email = "thomascaro627@gmail.com"},
@@ -12,7 +13,6 @@ classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Framework :: napari",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",

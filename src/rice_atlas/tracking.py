@@ -256,7 +256,7 @@ def proba_aware_heuristic_euclidean(a, b, mean_proba=0.85, base_weight=1.0):
 
 def astar_to_border_with_map(volume, start, border_mask, goal_point, heuristic_weight=0.3):
     shape = volume.shape
-    mean_proba = np.mean(volume)  # ou fixe comme 0.85 si tu préfères
+    mean_proba = np.mean(volume)  
 
     distances = np.full(shape, np.inf, dtype=np.float32)
     came_from = {}
