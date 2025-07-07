@@ -323,7 +323,7 @@ def build_segment_volume_widget(volume_shape):
                 print("🚀 Lancement du tracking...")
                 print(f"Zmax avant run tracking pipeline {z_max}")
                 all_paths , discarded_mask = run_tracking_pipeline(
-                    volume_path, tap_center, low_corner, high_corner, zmax=z_max,
+                    volume, tap_center, low_corner, high_corner, zmax=z_max,
                     probas_volume=probas_volume, segmented=segmented
                 )
                 print("✅ Tracking terminé.")

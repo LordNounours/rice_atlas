@@ -258,50 +258,48 @@ def astar_to_border_with_map(volume, start, border_mask, goal_point, heuristic_w
     shape = volume.shape
     mean_proba = np.mean(volume)  
 
-    distances = np.full(shape, np.inf, dtype=np.float32)
+    distances = {start: 0.0}
     came_from = {}
-    visited = np.zeros(shape, dtype=bool)
+    visited = set()
 
     heap = []
-    distances[start] = 0.0
-
     h = proba_aware_heuristic_euclidean(goal_point, start, mean_proba)
-
     heapq.heappush(heap, (h * heuristic_weight, 0.0, start))  # (f = g + h, g, node)
 
     while heap:
         f_cost, g_cost, current = heapq.heappop(heap)
-        z, y, x = current
 
-        if visited[z, y, x]:
+        if current in visited:
             continue
-        visited[z, y, x] = True
+        visited.add(current)
 
+        z, y, x = current
         if border_mask[z, y, x]:
             print(f"[✓] Bord atteint à {current} avec coût {g_cost:.2f} en partant de {start}")
             return current, came_from
 
         for dz, dy, dx in directions:
             nz, ny, nx = z + dz, y + dy, x + dx
-            if 0 <= nz < shape[0] and 0 <= ny < shape[1] and 0 <= nx < shape[2]:
-                if visited[nz, ny, nx]:
-                    continue
+            if not (0 <= nz < shape[0] and 0 <= ny < shape[1] and 0 <= nx < shape[2]):
+                continue
+            neighbor = (nz, ny, nx)
+            if neighbor in visited:
+                continue
 
-                weight = get_connectivity_weight(dz, dy, dx)
-                proba = volume[nz, ny, nx]
-                move_cost = weight * (1 - proba)
-                new_g = g_cost + move_cost
+            weight = get_connectivity_weight(dz, dy, dx)
+            proba = volume[nz, ny, nx]
+            move_cost = weight * (1 - proba)
+            new_g = g_cost + move_cost
 
-                if new_g < distances[nz, ny, nx]:
-                    distances[nz, ny, nx] = new_g
-                    came_from[(nz, ny, nx)] = (z, y, x)
-
-                    h = proba_aware_heuristic_euclidean(goal_point, (nz, ny, nx), mean_proba)
-
-                    heapq.heappush(heap, (new_g + heuristic_weight * h, new_g, (nz, ny, nx)))
+            if new_g < distances.get(neighbor, np.inf):
+                distances[neighbor] = new_g
+                came_from[neighbor] = current
+                h = proba_aware_heuristic_euclidean(goal_point, neighbor, mean_proba)
+                heapq.heappush(heap, (new_g + heuristic_weight * h, new_g, neighbor))
 
     print("[!] Aucun bord atteint.")
     return None, came_from
+
 
 
 def reconstruct_path(came_from, end, start):
@@ -341,7 +339,7 @@ def get_border_center(border_mask):
     return tuple(center)
 
 def run_tracking_pipeline(
-    input_path_volume,
+    volume,
     seed_point,
     low_corner,
     high_corner,
@@ -363,12 +361,6 @@ def run_tracking_pipeline(
     # start_points et discarded_mask sont extraits depuis segmented
     start_points, discarded_mask = get_extremities_from_volume(segmented, zmax, z_window, min_size, low_corner, high_corner)
 
-    # volume original chargé depuis input_path_volume (si besoin)
-    with tiff.TiffFile(input_path_volume) as tif:
-        volume = tif.asarray(out='memmap')
-
-
-    shape = volume.shape
     segmented_mask = segment_structure(volume,seed_point)
     border_mask = segmented_mask - binary_erosion(segmented_mask.astype(bool)).astype(np.uint8) * 255
     border_mask = border_mask.astype(bool)
