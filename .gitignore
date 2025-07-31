@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+
+# Generated temporary file
+src/rice_atlas/temp/binary_segmentation.dat
+
+
 # C extensions
 *.so
 

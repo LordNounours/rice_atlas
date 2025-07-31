@@ -3,7 +3,8 @@ name = "rice-atlas"
 dynamic = ["version"]
 description = "A plugin allowing the user to load a tiff file of a rice plant and from it automatically find the roots and leaves."
 readme = "README.md"
-license = "LGPL-3.0-or-later"
+license = { file = "LICENSE" }
+
 
 authors = [
   {name = "Thomas CARO"},
