@@ -1,5 +1,6 @@
 from setuptools import setup, Extension
 import pybind11
+import numpy
 
 ext_modules = [
     Extension(
@@ -11,7 +12,7 @@ ext_modules = [
 ]
 
 setup(
-    name="denoise",
+    name="functions",
     version="0.1",
     author="Toi",
     description="Suppression de voisins (segmentation prétraitement)",

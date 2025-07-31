@@ -124,33 +124,72 @@ def build_segment_volume_widget(volume_shape):
 
         z_max = tap_z + 100
         print(f"z max apres recup tap center : {z_max}")
+        leaf_seg=False
+        root_seg=False
+        # Segmentation feuille
+        if model_leaf_path and Path(model_leaf_path).is_file():
+            probas_volume_leaf, segmented_leaf, (zmin_leaf, ymin_leaf, xmin_leaf) = segment_volume_leaf(
+                model_path=model_leaf_path,
+                volume=volume,
+                output_path=output_path,
+                patch_size=patch_size,
+                stride=stride,
+                batch_size=batch_size,
+                pretreatment=pretreatment,
+                tap_center=tap_center,
+            )
+            leaf_seg=True
+        else:
+            print(f"[Info] Aucun modèle feuille fourni ou chemin invalide : {model_leaf_path}")
 
-        # Lancer la segmentation
-        probas_volume, segmented ,(zmin_root,ymin_root,xmin_root) = segment_volume_root(
-            model_path=model_root_path,
-            volume=volume,
-            output_path=output_path,
-            patch_size=patch_size,
-            stride=stride,
-            batch_size=batch_size,
-            pretreatment=pretreatment,
-            tap_center=tap_center,
-        )
+        # Segmentation racine
+        if model_root_path and Path(model_root_path).is_file():
+            probas_volume, segmented, (zmin_root, ymin_root, xmin_root) = segment_volume_root(
+                model_path=model_root_path,
+                volume=volume,
+                output_path=output_path,
+                patch_size=patch_size,
+                stride=stride,
+                batch_size=batch_size,
+                pretreatment=pretreatment,
+                tap_center=tap_center,
+            )
+            root_seg=True
+        else:
+            print(f"[Info] Aucun modèle racine fourni ou chemin invalide : {model_root_path}")
 
-        if viewer is not None:
-            viewer.add_image(probas_volume, name="Probabilités classe 1", colormap="gray")
-            viewer.add_labels( segmented, name="Segmentation")
-            def reorder_layers():
-                desired_order = ["Volume", "Probabilités classe 1", "Segmentation"]
+        desired_order = ["Volume"]
 
-                for target_index, name in enumerate(reversed(desired_order)):
-                    for current_index, layer in enumerate(viewer.layers):
-                        if layer.name == name:
-                            viewer.layers.move(current_index, target_index)
-                            break
+    # Afficher la probabilité et la segmentation des feuilles si disponibles
+        if  leaf_seg:
+            viewer.add_image(probas_volume_leaf, name="Probabilités feuille", colormap="gray")
+            desired_order.append("Probabilités feuille")
 
-            viewer.layers.selection.active = viewer.layers["Volume"]
-            reorder_layers()
+        if  leaf_seg:
+            viewer.add_labels(segmented_leaf, name="Segmentation feuille")
+            desired_order.append("Segmentation feuille")
+
+        # Afficher la probabilité et la segmentation des racines si disponibles
+        if  root_seg:
+            viewer.add_image(probas_volume, name="Probabilités racine", colormap="gray")
+            desired_order.append("Probabilités racine")
+
+        if  root_seg:
+            viewer.add_labels(segmented, name="Segmentation racine")
+            desired_order.append("Segmentation racine")
+
+        # S'assurer que le volume est toujours actif et premier
+        viewer.layers.selection.active = viewer.layers["Volume"]
+
+        # Réorganiser les couches
+        def reorder_layers():
+            for target_index, name in enumerate(reversed(desired_order)):
+                for current_index, layer in enumerate(viewer.layers):
+                    if layer.name == name:
+                        viewer.layers.move(current_index, target_index)
+                        break
+
+        reorder_layers()
 
         def update_selection_rectangle():
             if not viewer:
@@ -322,7 +361,7 @@ def build_segment_volume_widget(volume_shape):
                 print(f"Utilisation des coins : low {low_corner}, high {high_corner}")
                 print("🚀 Lancement du tracking...")
                 print(f"Zmax avant run tracking pipeline {z_max}")
-                all_paths , discarded_mask = run_tracking_pipeline(
+                all_paths  = run_tracking_pipeline(
                     volume, tap_center, low_corner, high_corner, zmax=z_max,
                     probas_volume=probas_volume, segmented=segmented
                 )
@@ -364,11 +403,10 @@ def build_segment_volume_widget(volume_shape):
 
                 viewer.add_image(make_color_mask(all_paths,segmented.shape), name="Chemins colorés")
                 viewer.add_image(make_color_mask(all_paths_recal,segmented.shape), name="Chemins colorés recalés")
-                viewer.add_image(discarded_mask, name="Composantes non utilisées",colormap="red",opacity=0.5)
                 from collections import defaultdict
                 manual_points_stack = defaultdict(list)
                 def reorder_layers_afterseg():
-                    desired_order = ["Volume","Chemins colorés recalés","Chemins colorés","Composantes non utilisées", "Probabilités classe 1", "Segmentation"]
+                    desired_order = ["Volume","Chemins colorés recalés","Chemins colorés", "Probabilités classe 1", "Segmentation"]
 
                     for target_index, name in enumerate(reversed(desired_order)):
                         for current_index, layer in enumerate(viewer.layers):
@@ -523,7 +561,7 @@ def build_segment_volume_widget(volume_shape):
 
                 btn_add_points.clicked.connect(toggle_add_mode)
                 def reorder_layers_add():
-                    desired_order = ["Volume","Chemins colorés recalés","Chemin sélectionné","Chemins colorés","Composantes non utilisées", "Probabilités classe 1", "Segmentation"]
+                    desired_order = ["Volume","Chemins colorés recalés","Chemin sélectionné","Chemins colorés", "Probabilités classe 1", "Segmentation"]
 
                     for target_index, name in enumerate(reversed(desired_order)):
                         for current_index, layer in enumerate(viewer.layers):
@@ -693,7 +731,6 @@ def build_segment_volume_widget(volume_shape):
                 viewer.layers["Probabilités classe 1"].visible = False
                 viewer.layers["Segmentation"].visible = False
                 viewer.layers["Chemins colorés"].visible = False
-                viewer.layers["Composantes non utilisées"].visible = False
                 viewer.layers.selection.active = viewer.layers["Volume"]
 
                 def save_updated_segmentation() :

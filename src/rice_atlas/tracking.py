@@ -11,6 +11,7 @@ from skimage.morphology import ball
 import random
 from tqdm import tqdm
 import gc
+import cc3d
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
@@ -140,85 +141,61 @@ def segment_structure(volume, seed_point, output_path="structure_segmentee_globa
 
 
 def get_extremities_from_volume(volume, zmax, z_window, min_size, low_corner, high_corner):
-    """
-    Trouve les extrémités des composantes dans un volume numpy, en filtrant
-    sur zmax, taille min, et coordonnées XY dans un rectangle donné.
-    
-    Parameters:
-        volume : ndarray (3D)
-            Volume binaire (uint8 ou bool) déjà chargé en mémoire.
-        zmax : int
-            Limite supérieure sur l’axe Z à considérer.
-        z_window : int
-            Fenêtre de recherche sur Z (entre zmax-z_window et zmax).
-        min_size : int
-            Taille minimale d’une composante pour être conservée.
-        low_corner : tuple (x, y)
-            Coin bas (X, Y) du rectangle de filtrage.
-        high_corner : tuple (x, y)
-            Coin haut (X, Y) du rectangle de filtrage.
-    
-    Returns:
-        z_min_points : list of tuples (z, y, x)
-            Points minimum en Z des composantes filtrées.
-        discarded_mask : ndarray
-            Masque des voxels rejetés.
-    """
     volume_cropped = volume[:zmax]
     print(f"Sous-volume utilisé : {volume_cropped.shape}")
+    
 
-    if volume_cropped.dtype != np.uint8:
-        volume_cropped = (volume_cropped >= 0.5).astype(np.uint8)
-
-    labels, num = label(volume_cropped, connectivity=3, return_num=True)
+    """if volume_cropped.dtype != np.uint8:
+        volume_cropped = (volume_cropped >= 0.5).astype(np.uint8)"""
+    labels = cc3d.connected_components(volume_cropped, connectivity=26)
+    num = labels.max()
+    #labels, num = label(volume_cropped, connectivity=3, return_num=True)
     print(f"{num} composantes détectées dans le sous-volume")
-
-    discarded_mask = np.zeros_like(volume_cropped, dtype=np.uint8)
 
     z_start = zmax - z_window
     z_end = zmax
-
-    print("Filtrage des composantes...")
 
     z_min_points = []
     filtered_count = 0
     discarded_count = 0
 
-    for region in regionprops(labels):
-        coords = region.coords
-        # Vérification : tous les voxels doivent être dans le foreground
-        for c in coords:
-            z, y, x = c
-            if volume_cropped[z, y, x] != 1:
-                raise ValueError(f"Voxel {c} hors foreground dans la région {region.label}")
-        z_coords = coords[:, 0]
-
+    for region in regionprops(labels,cache=False):
         if region.area < min_size:
-            discarded_mask[tuple(coords.T)] = 255
             discarded_count += 1
             continue
 
-        z_max_region = np.max(z_coords)
-        zm, ym, xm = coords[z_coords == z_max_region][0]
+        # Utiliser bbox pour éviter coords
+        z0, y0, x0, z1, y1, x1 = region.bbox
+        z_max_region = z1 - 1  # Max inclusif
 
+        # Trouver un point au z_max (plus rapide qu’analyser tous coords)
+        slice_z = labels[z_max_region, y0:y1, x0:x1]
+        mask_at_zmax = slice_z == region.label
+        if not np.any(mask_at_zmax):
+            continue
+        indices = np.argwhere(mask_at_zmax)
+        ym, xm = indices[0] + [y0, x0]
+
+        # Vérifier fenêtre Z et rectangle XY
         if z_start <= z_max_region <= z_end and low_corner[0] < xm < high_corner[0] and high_corner[1] < ym < low_corner[1]:
-            z_min = np.min(z_coords)
-            z_min_point = coords[z_coords == z_min][0]
-            z_min_points.append(tuple(z_min_point))
-            filtered_count += 1
-        else:
-            discarded_mask[tuple(coords.T)] = 255
-            discarded_count += 1
+            # Trouver point à z_min
+            z_min = z0
+            slice_zmin = labels[z_min, y0:y1, x0:x1]
+            mask_at_zmin = slice_zmin == region.label
+            indices_min = np.argwhere(mask_at_zmin)
+            if indices_min.size > 0:
+                ymin, xmin = indices_min[0] + [y0, x0]
+                z_min_points.append((z_min, ymin, xmin))
+                filtered_count += 1
 
     print(f"Nombre final de composantes retenues : {filtered_count}")
     print(f"Nombre de composantes rejetées : {discarded_count}")
     z_min_points = sorted(z_min_points, key=lambda coord: coord[0])
     print("Liste des points (z_min, y, x) :", z_min_points)
-    
-    print("Valeurs uniques dans discarded_mask :", np.unique(discarded_mask))
-    gc.collect()
 
-    return z_min_points, discarded_mask
+    gc.collect()
+    return z_min_points
+
 
 
 # --- Génération des directions 3D ---
@@ -359,8 +336,7 @@ def run_tracking_pipeline(
         raise ValueError("Il faut passer 'probas_volume' ET 'segmented' directement, pas les chemins.")
     print(f"zmax avant get extremitis {zmax}")
     # start_points et discarded_mask sont extraits depuis segmented
-    start_points, discarded_mask = get_extremities_from_volume(segmented, zmax, z_window, min_size, low_corner, high_corner)
-
+    start_points = get_extremities_from_volume(segmented, zmax, z_window, min_size, low_corner, high_corner)
     segmented_mask = segment_structure(volume,seed_point)
     border_mask = segmented_mask - binary_erosion(segmented_mask.astype(bool)).astype(np.uint8) * 255
     border_mask = border_mask.astype(bool)
@@ -384,6 +360,6 @@ def run_tracking_pipeline(
 
     print("[✓] Pipeline de tracking terminé.")
 
-    return all_paths, discarded_mask
+    return all_paths
 
 

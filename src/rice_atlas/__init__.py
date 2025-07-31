@@ -1,6 +1,5 @@
 from ._widget import load_volume_widget
 
-
 def make_widget():
     widget = load_volume_widget()
     
