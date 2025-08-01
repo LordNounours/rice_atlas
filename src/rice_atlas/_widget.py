@@ -21,10 +21,19 @@ if TYPE_CHECKING:
 
 
 
+
+
+
 save_button_ref = {}
 segmentation_dock_ref = {}
 previous_mouse_callbacks = []
 path_names = {}
+
+def make_widget():
+    widget = load_volume_widget()    
+    return widget
+
+
 
 def make_widget():
     widget = load_volume_widget()    
