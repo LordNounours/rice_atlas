@@ -18,10 +18,17 @@ from qtpy.QtWidgets import QMessageBox
 if TYPE_CHECKING:
     import napari
 
+
+
+
 save_button_ref = {}
 segmentation_dock_ref = {}
 previous_mouse_callbacks = []
 path_names = {}
+
+def make_widget():
+    widget = load_volume_widget()    
+    return widget
 
 @magic_factory(call_button="Charger un volume")
 def load_volume_widget(viewer: "napari.viewer.Viewer" = None):
