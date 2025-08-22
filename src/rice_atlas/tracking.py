@@ -155,6 +155,8 @@ def get_extremities_from_volume(volume, zmax, z_window, min_size, low_corner, hi
     z_start = zmax - z_window
     z_end = zmax
 
+    
+
     z_min_points = []
     filtered_count = 0
     discarded_count = 0
@@ -195,6 +197,81 @@ def get_extremities_from_volume(volume, zmax, z_window, min_size, low_corner, hi
 
     gc.collect()
     return z_min_points
+
+import gc
+import numpy as np
+import cc3d
+from skimage.measure import regionprops
+
+def get_extremities_from_volume_leaf(volume, zmin, volume_z_max, z_window, min_size, low_corner, high_corner):
+    # On découpe le volume à partir de zmin
+    volume_cropped = volume[zmin:]
+    print(f"Sous-volume utilisé : {volume_cropped.shape}")
+    
+    # Détection des composantes connexes (dans le repère local croppé)
+    labels = cc3d.connected_components(volume_cropped, connectivity=26)
+    num = labels.max()
+    print(f"{num} composantes détectées dans le sous-volume")
+
+    # Bornes en Z (globales)
+    z_start = zmin + z_window
+    z_end = volume_z_max
+    print(f"z start : {z_start}")
+    print(f"z end : {z_end}")
+
+    z_min_points = []
+    filtered_count = 0
+    discarded_count = 0
+
+    # Parcours des régions détectées
+    for region in regionprops(labels, cache=False):
+        # Filtrage par taille si nécessaire
+        # if region.area < min_size:
+        #     discarded_count += 1
+        #     continue
+
+        # Bounding box en indices locaux (dans labels)
+        z0_local, y0, x0, z1_local, y1, x1 = region.bbox
+        z_max_local = z1_local - 1
+        z_min_local = z0_local
+
+        # Conversion en indices globaux
+        z_max_global = z_max_local + zmin
+        z_min_global = z_min_local + zmin
+
+        # Slice au z_max local
+        slice_z = labels[z_max_local, y0:y1, x0:x1]
+        mask_at_zmax = slice_z == region.label
+        if not np.any(mask_at_zmax):
+            continue
+
+        indices = np.argwhere(mask_at_zmax)
+        ym, xm = indices[0] + [y0, x0]
+        print(z_max_global, ym, xm)
+
+        # Vérification des critères de filtrage
+        if z_start <= z_max_global <= z_end and low_corner[0] < xm < high_corner[0] and high_corner[1] < ym < low_corner[1]:
+            # Slice au z_min local
+            slice_zmin = labels[z_min_local, y0:y1, x0:x1]
+            mask_at_zmin = slice_zmin == region.label
+            indices_min = np.argwhere(mask_at_zmin)
+            if indices_min.size > 0:
+                ymin, xmin = indices_min[0] + [y0, x0]
+
+                # On stocke le point avec coordonnées globales
+                z_min_points.append((z_min_global, ymin, xmin))
+                filtered_count += 1
+
+    print(f"Nombre final de composantes retenues : {filtered_count}")
+    print(f"Nombre de composantes rejetées : {discarded_count}")
+
+    # Tri par profondeur
+    z_min_points = sorted(z_min_points, key=lambda coord: coord[0])
+    print("Liste des points (z_min, y, x) :", z_min_points)
+
+    gc.collect()
+    return z_min_points
+
 
 
 
@@ -344,7 +421,7 @@ def run_tracking_pipeline(
 
     # découpage des probas volume si besoin
     volume_proba_red = probas_volume[:zmax+100]
-
+    
     save_arrays(volume_proba_red, border_mask)
 
     del probas_volume
@@ -354,8 +431,53 @@ def run_tracking_pipeline(
     center = get_border_center(border_mask)
     all_paths = dijkstra_parallel(start_points,center, max_workers=max_workers)
 
-    #export_paths_colored_mask(shape, all_paths, os.path.join(output_dir, "chemins_colores.tif"))
-    #tiff.imwrite(os.path.join(output_dir, "composantes_non_utilisées.tif"), discarded_mask.astype(np.uint8))
+
+    print("[✓] Pipeline de tracking terminé.")
+
+    return all_paths
+
+
+def run_tracking_pipeline_leaf(
+    volume,
+    seed_point,
+    low_corner,
+    high_corner,
+    output_dir=".",
+    zmin=2000,
+    z_window=250,
+    min_size=1000,
+    box_size=250,
+    max_workers=4,
+    probas_volume=None,
+    segmented=None
+):
+    print("[i] Début du pipeline de tracking...")
+
+    # Si on n’a pas les volumes en mémoire, on lit depuis les fichiers
+    if segmented is None or probas_volume is None:
+        raise ValueError("Il faut passer 'probas_volume' ET 'segmented' directement, pas les chemins.")
+    print(f"zmax avant get extremitis {zmin}")
+    # start_points et discarded_mask sont extraits depuis segmented
+    start_points = get_extremities_from_volume_leaf(segmented, zmin,volume.shape[0], z_window, zmin, low_corner, high_corner)
+    segmented_mask = segment_structure(volume,seed_point)
+    border_mask = segmented_mask - binary_erosion(segmented_mask.astype(bool)).astype(np.uint8) * 255
+    border_mask = border_mask.astype(bool)
+    
+    proba_class1 = probas_volume[1]
+    proba_class2 = probas_volume[2]
+    combined_proba = np.maximum(proba_class1, proba_class2)
+
+    # découpage des probas volume si besoin
+    volume_proba_red = combined_proba[zmin-100:]
+
+    save_arrays(volume_proba_red, border_mask)
+
+    del probas_volume
+    del volume
+    del segmented
+    gc.collect()
+    center = get_border_center(border_mask)
+    all_paths = dijkstra_parallel(start_points,center, max_workers=max_workers)
 
 
     print("[✓] Pipeline de tracking terminé.")
