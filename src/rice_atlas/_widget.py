@@ -12,6 +12,12 @@ import csv
 from pathlib import Path
 from scipy.ndimage import center_of_mass
 from tifffile import TiffWriter
+from rice_atlas.slice_extraction import (
+    extract_and_save_slices,
+    extract_organ_volume,
+    interpolate_path_with_frames,
+    trilinear_interpolation
+)
 
 from skimage.draw import disk
 from PyQt5.QtCore import QTimer
@@ -1303,47 +1309,31 @@ def build_segment_volume_widget(volume_shape):
 
                     return results
                 def extract_root_slices():
+                    """Extract slices for all tracked roots using the slice_extraction module."""
                     dir_path = QFileDialog.getExistingDirectory(caption="Dossier des slices racines")
                     if not dir_path:
                         return
-
-                    half = 64  # moitié taille de la coupe en pixels
-                    for idx, (_, _, path) in enumerate(all_paths_recal_root):
-                        root_dir = Path(dir_path) / f"root_{idx}"
-                        root_dir.mkdir(parents=True, exist_ok=True)
-
-                        # Calcul de la base locale sur le chemin (à adapter si besoin)
-                        frames = interpolate_with_local_frames(path, step=1.0)
-
-                        for frame in frames:
-                            z, y, x = frame['point']
-                            axis0, axis1, axis2 = frame['axis0'], frame['axis1'], frame['axis2']
-
-                            # Vérifier les bornes (volume.shape = (Z, Y, X))
-                            if not (0 <= z <volume.shape[0]):
-                                continue
-
-                            # Construire un plan 2D dans le volume autour de (z,y,x) orthogonal à axis2
-                            # Exemple : créer une grille 2D autour de (0,0) dans le repère local (axis0, axis1)
-                            yy, xx = np.meshgrid(np.arange(-half, half), np.arange(-half, half), indexing='ij')
-
-                            # Points du patch dans le repère global
-                            coords = (np.array([x, y, z]) +
-                                    xx[..., None] * axis0 +
-                                    yy[..., None] * axis1)  # forme (patch_size, patch_size, 3)
-
-                            # coords sont en (X, Y, Z) flottants — il faut les réorganiser et interpoler dans volume
-
-                            # Réorganiser coords pour accès volume : volume[z, y, x]
-                            sample_coords = np.stack([coords[..., 2], coords[..., 1], coords[..., 0]], axis=0)  # (3, H, W)
-
-                            # Interpolation trilineaire pour extraire la slice orientée
-                            slice_ = trilinear_interpolation(volume, sample_coords)
-
-                            # Sauvegarder la slice
-                            imwrite(str(root_dir / f"{z}_{y}_{x}.tif"), slice_.astype(volume.dtype))
-
-                    print(f"✅ Slices extraites dans : {dir_path}")
+                    
+                    dir_path = Path(dir_path)
+                    
+                    for idx, (start, end, path) in enumerate(all_paths_recal_root):
+                        organ_id = f"root_{idx:03d}"
+                        organ_dir = dir_path / organ_id
+                        
+                        extract_and_save_slices(
+                            volume=volume,
+                            centerline=np.array(path),
+                            output_dir=organ_dir,
+                            organ_id=organ_id,
+                            organ_type="root",
+                            half_size=64,
+                            step=1.0,
+                            save_3d_stack=True,
+                            save_individual=True,
+                            save_metadata=True
+                        )
+                    
+                    print(f"✓ Extracted {len(all_paths_recal_root)} roots to {dir_path}")
 
 
 

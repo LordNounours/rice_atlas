@@ -27,8 +27,9 @@ napari
 
 
 #Usage
-Click on Charger un volume, select a Xray 3D volume in grayscale. Then set the slicer at a place where we see well the roottap.
+Click on Charger un volume, select a Xray 3D volume in grayscale. Then set the slicer at a place where we see well the roottap (we should see one single inside roottap volume, and the roots around it).
 Then click on Chemin du modeles pour racines, to load the neural network. Navigate to the ressources dir in the parent path of the git repo on you computer. Go to root_model, and select segformer3d_epoch_10.pth
 
+The prediction starts when clicking run. Take care of the batch size, done for a 32 GB RAM GPU. Instead reduce it
 In the shell there will be some things happening.
 
