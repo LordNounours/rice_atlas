@@ -1,4 +1,4 @@
-name: rice-atlas
+name: rice_atlas
 display_name: Rice Atlas
 # use 'hidden' to remove plugin from napari hub search results
 visibility: public

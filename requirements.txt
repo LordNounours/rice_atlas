@@ -1,0 +1,16 @@
+# Dépendances rice_atlas + script unroll_roots_manual.py
+# Généré le 2026-07-03
+# Installer avec : pip install -r requirements.txt
+
+numpy
+scipy
+scikit-image
+tifffile
+pandas
+tqdm
+napari[all]
+qtpy
+PyQt6
+magicgui
+connected-components-3d
+matplotlib
